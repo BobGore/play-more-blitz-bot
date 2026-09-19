@@ -96,6 +96,12 @@ def current_month(now=None):
     return now.astimezone(timezone.utc).strftime("%Y-%m")
 
 
+def next_month(month):
+    """The "YYYY-MM" month after `month`."""
+    _, end = month_bounds(month)
+    return f"{end.year:04d}-{end.month:02d}"
+
+
 def previous_month(month):
     """The "YYYY-MM" month before `month`."""
     start, _ = month_bounds(month)

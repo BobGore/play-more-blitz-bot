@@ -310,6 +310,307 @@ def test_remove_rejects_an_unknown_site(site):
     assert store.find_active("alice") != []
 
 
+# --- !100gob ---------------------------------------------------------------
+
+
+def registered(owner, username="alice", site_name="chess.com", month=None):
+    store.add_player(site_name, username, owner, month or sources.current_month(), 1500)
+
+
+def in_challenge(username="alice", site_name="chess.com"):
+    return bool(store.month_row(site_name, username, sources.current_month())["in_100gob"])
+
+
+def test_100gob_with_one_account_opts_it_in_with_a_tick_and_no_text():
+    registered(ALICE)
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx)
+    assert reactions(ctx) == [OK] and said(ctx) == []
+    assert in_challenge()
+
+
+def test_100gob_is_the_command_name_and_case_does_not_matter():
+    assert botmod.bot.get_command("100gob") is botmod.gob
+    assert botmod.bot.get_command("100GOB") is botmod.gob
+    assert botmod.bot.get_command("100Gob") is botmod.gob
+
+
+def test_100gob_with_no_account_says_to_add_one_first():
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx)
+    assert reactions(ctx) == [NO] and "!add" in said(ctx)[0]
+
+
+def test_100gob_with_two_accounts_asks_which_and_changes_nothing():
+    registered(ALICE, "alice_cc", "chess.com")
+    registered(ALICE, "alice_li", "lichess")
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx)
+    assert reactions(ctx) == [NO]
+    reply = said(ctx)[0]
+    assert "alice_cc (chess.com)" in reply and "alice_li (lichess)" in reply and "`!100gob alice_cc chess.com`" in reply
+    assert not in_challenge("alice_cc") and not in_challenge("alice_li", "lichess")
+
+
+def test_100gob_with_a_username_picks_that_account():
+    registered(ALICE, "alice_cc", "chess.com")
+    registered(ALICE, "alice_li", "lichess")
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx, "alice_li")
+    assert reactions(ctx) == [OK]
+    assert in_challenge("alice_li", "lichess") and not in_challenge("alice_cc")
+
+
+def test_100gob_username_is_case_insensitive():
+    registered(ALICE, "Alice")
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx, "ALICE")
+    assert reactions(ctx) == [OK] and in_challenge("Alice")
+
+
+def test_100gob_for_someone_elses_account_needs_an_admin():
+    registered(ALICE)
+    ctx = make_ctx(BOB)
+    run(botmod.gob, ctx, "alice")
+    assert reactions(ctx) == [NO] and "only whoever added" in said(ctx)[0]
+    assert not in_challenge()
+
+
+def test_an_admin_can_put_anyone_in_100gob():
+    registered(ALICE)
+    ctx = make_ctx(MATT_ADMIN)
+    run(botmod.gob, ctx, "alice")
+    assert reactions(ctx) == [OK] and in_challenge()
+
+
+def test_100gob_for_an_unknown_or_removed_account():
+    registered(ALICE)
+    store.remove_player("chess.com", "alice")
+    for name in ("alice", "nobody"):
+        ctx = make_ctx(ALICE)
+        run(botmod.gob, ctx, name)
+        assert reactions(ctx) == [NO] and "isn't on the list" in said(ctx)[0]
+
+
+def test_100gob_twice_in_a_month_is_refused_kindly():
+    registered(ALICE)
+    run(botmod.gob, make_ctx(ALICE))
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx)
+    assert reactions(ctx) == [NO] and "already in 100GOB" in said(ctx)[0]
+    assert in_challenge()  # still in
+
+
+def test_100gob_before_the_months_row_exists_keeps_the_sign_up_and_ticks():
+    # As in the first hours of a new month, before its row is created: only an old row exists.
+    registered(ALICE, month="2020-01")
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx)
+    assert reactions(ctx) == [OK] and said(ctx) == []
+    assert store.signups(sources.current_month()) == ["alice"]  # applied when the row is created
+
+
+def test_100gob_for_a_closed_month_says_so():
+    registered(ALICE)
+    with store._transaction() as conn:
+        conn.execute("UPDATE monthly_results SET closed_at = '2000-01-01T00:00:00+00:00'")
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx)
+    assert reactions(ctx) == [NO] and "already closed" in said(ctx)[0]
+
+
+# --- !100gobnext -----------------------------------------------------------
+
+
+def next_month():
+    return sources.next_month(sources.current_month())
+
+
+def test_100gobnext_signs_up_for_the_month_after_the_current_one_and_leaves_this_month_alone():
+    registered(ALICE)
+    ctx = make_ctx(ALICE)
+    run(botmod.gob_next, ctx)
+    assert reactions(ctx) == [OK] and said(ctx) == []
+    assert store.signups(next_month()) == ["alice"]
+    assert not in_challenge()  # this month untouched
+
+
+def test_100gobnext_and_100gob_are_independent_and_both_can_be_used():
+    registered(ALICE)
+    run(botmod.gob, make_ctx(ALICE))
+    ctx = make_ctx(ALICE)
+    run(botmod.gob_next, ctx)
+    assert reactions(ctx) == [OK]
+    assert in_challenge() and store.signups(next_month()) == ["alice"]
+
+
+def test_100gobnext_twice_says_already_signed_up_and_names_the_month():
+    registered(ALICE)
+    run(botmod.gob_next, make_ctx(ALICE))
+    ctx = make_ctx(ALICE)
+    run(botmod.gob_next, ctx)
+    import render
+
+    assert reactions(ctx) == [NO]
+    assert f"already in 100GOB for {render.month_title(next_month())}" in said(ctx)[0]
+
+
+def test_100gobnext_is_a_command_and_case_does_not_matter():
+    assert botmod.bot.get_command("100gobnext") is botmod.gob_next
+    assert botmod.bot.get_command("100GOBNEXT") is botmod.gob_next
+
+
+def test_100gobnext_with_two_accounts_asks_which_using_its_own_command_name():
+    registered(ALICE, "alice_cc", "chess.com")
+    registered(ALICE, "alice_li", "lichess")
+    ctx = make_ctx(ALICE)
+    run(botmod.gob_next, ctx)
+    assert reactions(ctx) == [NO] and "`!100gobnext alice_cc chess.com`" in said(ctx)[0]
+    assert store.signups(next_month()) == []
+
+
+def test_100gobnext_follows_the_same_ownership_rule():
+    registered(ALICE)
+    ctx = make_ctx(BOB)
+    run(botmod.gob_next, ctx, "alice")
+    assert reactions(ctx) == [NO] and "only whoever added" in said(ctx)[0]
+    assert store.signups(next_month()) == []
+    ctx = make_ctx(MATT_ADMIN)
+    run(botmod.gob_next, ctx, "alice")
+    assert reactions(ctx) == [OK] and store.signups(next_month()) == ["alice"]
+
+
+def test_100gobnext_with_no_account_says_to_add_one_first():
+    ctx = make_ctx(ALICE)
+    run(botmod.gob_next, ctx)
+    assert reactions(ctx) == [NO] and "!add" in said(ctx)[0]
+
+
+def test_results_lists_who_has_signed_up_for_next_month():
+    registered(ALICE, "Alice")
+    registered(BOB, "bob")
+    run(botmod.gob_next, make_ctx(ALICE), "Alice")
+    ctx = make_ctx(BOB)
+    run(botmod.results, ctx)
+    text = "\n".join(said(ctx))
+    import render
+
+    assert f"100GOB sign-ups for {render.month_title(next_month())}: `Alice`" in text
+    assert "`bob`" not in text.split("100GOB sign-ups")[1]
+
+
+def test_results_has_no_signup_line_when_nobody_has_signed_up():
+    registered(ALICE)
+    ctx = make_ctx(ALICE)
+    run(botmod.results, ctx)
+    assert "sign-ups" not in "\n".join(said(ctx))
+
+
+# --- the scheduled sign-up call --------------------------------------------
+
+
+class FakeChannel:
+    def __init__(self, fail=False):
+        self.sent, self.fail = [], fail
+
+    async def send(self, text):
+        if self.fail:
+            raise RuntimeError("Missing Access")
+        self.sent.append(text)
+
+
+@pytest.fixture
+def call(monkeypatch):
+    """Make the sign-up call due for October, and capture where and what would be posted."""
+    state = {"channel": FakeChannel(), "asked_for": []}
+    monkeypatch.setattr(botmod.announce, "signup_call_due", lambda now: "2026-10")
+
+    def get_channel(channel_id):
+        state["asked_for"].append(channel_id)
+        return state["channel"]
+
+    monkeypatch.setattr(botmod.bot, "get_channel", get_channel)
+    return state
+
+
+def test_the_signup_call_is_posted_to_the_configured_channel(call):
+    assert asyncio.run(botmod.post_signup_call_if_due()) is True
+    assert call["asked_for"] == [botmod.POST_CHANNEL_ID]
+    assert len(call["channel"].sent) == 1 and "October 2026" in call["channel"].sent[0]
+
+
+def test_the_signup_call_is_posted_once_even_across_restarts(call):
+    assert asyncio.run(botmod.post_signup_call_if_due()) is True
+    assert asyncio.run(botmod.post_signup_call_if_due()) is False  # e.g. the bot restarted
+    assert len(call["channel"].sent) == 1
+
+
+def test_a_failed_post_gives_the_claim_back_so_the_next_try_posts_it(call):
+    call["channel"].fail = True
+    assert asyncio.run(botmod.post_signup_call_if_due()) is False
+    call["channel"].fail = False
+    assert asyncio.run(botmod.post_signup_call_if_due()) is True
+    assert len(call["channel"].sent) == 1
+
+
+def test_nothing_is_posted_when_the_call_is_not_due(call, monkeypatch):
+    monkeypatch.setattr(botmod.announce, "signup_call_due", lambda now: None)
+    assert asyncio.run(botmod.post_signup_call_if_due()) is False
+    assert call["channel"].sent == [] and call["asked_for"] == []
+
+
+def test_the_scheduled_task_runs_at_9am_uk_time():
+    assert botmod.daily_posts.time == [botmod.announce.POST_TIME]
+
+
+def test_100gob_when_a_name_is_on_both_sites_asks_which_and_a_site_settles_it():
+    registered(ALICE, "alice", "chess.com")
+    registered(ALICE, "alice", "lichess")
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx, "alice")
+    assert reactions(ctx) == [NO] and "chess.com and lichess" in said(ctx)[0]
+    assert not in_challenge("alice", "chess.com") and not in_challenge("alice", "lichess")
+
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx, "alice", "LICHESS")
+    assert reactions(ctx) == [OK]
+    assert in_challenge("alice", "lichess") and not in_challenge("alice", "chess.com")
+
+
+def test_100gob_rejects_an_unknown_site():
+    registered(ALICE)
+    ctx = make_ctx(ALICE)
+    run(botmod.gob, ctx, "alice", "example.org")
+    assert reactions(ctx) == [NO] and "chess.com" in said(ctx)[0]
+    assert not in_challenge()
+
+
+def test_100gob_makes_no_calls_to_the_chess_sites_and_starts_no_refresh(site, refreshes):
+    registered(ALICE)
+    run(botmod.gob, make_ctx(ALICE))
+    assert site["calls"] == [] and refreshes == []
+
+
+def test_joining_shows_up_in_the_results_table_as_progress():
+    import render
+    from datetime import datetime, timezone
+
+    registered(ALICE)
+    run(botmod.gob, make_ctx(ALICE))
+    month = sources.current_month()
+    (table,) = render.render_results(store.results(month), month, datetime.now(timezone.utc), botmod.GOB_TARGET)
+    assert "100GOB 0/100" in table
+
+
+def test_a_missing_argument_style_error_gets_the_100gob_usage():
+    from discord.ext import commands
+
+    ctx = make_ctx(ALICE)
+    ctx.command = SimpleNamespace(name="100gob")
+    asyncio.run(botmod.on_command_error(ctx, commands.BadArgument("x")))
+    assert "!100gob [username] [site]" in said(ctx)[0]
+
+
 # --- !results --------------------------------------------------------------
 
 
@@ -350,6 +651,36 @@ def test_a_missing_argument_gets_the_commands_usage():
     ctx.command = SimpleNamespace(name="add")
     asyncio.run(botmod.on_command_error(ctx, commands.MissingRequiredArgument(SimpleNamespace(name="site", displayed_name=None))))
     assert reactions(ctx) == [NO] and "!add <username> <site>" in said(ctx)[0]
+
+
+def test_an_unknown_command_is_silent_in_discord_but_logged(caplog):
+    from discord.ext import commands
+
+    ctx = make_ctx(ALICE)
+    ctx.invoked_with, ctx.channel = "100gob", SimpleNamespace(id=555)
+    with caplog.at_level("INFO", logger="playmoreblitz"):
+        asyncio.run(botmod.on_command_error(ctx, commands.CommandNotFound('Command "100gob" is not found')))
+    assert ctx.send.await_count == 0 and reactions(ctx) == []  # nothing said in the channel
+    assert "no command called !100gob (channel 555)" in caplog.text
+
+
+def test_a_command_in_a_disallowed_channel_is_silent_in_discord_but_logged(caplog):
+    from discord.ext import commands
+
+    ctx = make_ctx(ALICE)
+    ctx.invoked_with, ctx.channel = "results", SimpleNamespace(id=777)
+    with caplog.at_level("INFO", logger="playmoreblitz"):
+        asyncio.run(botmod.on_command_error(ctx, commands.CheckFailure("nope")))
+    assert ctx.send.await_count == 0 and reactions(ctx) == []
+    assert "!results in channel 777, which is not an allowed channel" in caplog.text
+
+
+def test_every_command_that_runs_is_logged(caplog):
+    ctx = make_ctx(ALICE)
+    ctx.command, ctx.channel = SimpleNamespace(qualified_name="results"), SimpleNamespace(id=42)
+    with caplog.at_level("INFO", logger="playmoreblitz"):
+        asyncio.run(botmod.on_command(ctx))
+    assert f"command !results from {ALICE} in channel 42" in caplog.text
 
 
 def test_commands_from_outside_the_allowed_channels_are_ignored_silently():

@@ -167,6 +167,36 @@ def test_nobody_registered_says_how_to_start():
     assert "Nobody is registered yet" in message and "!add" in message
 
 
+# --- next month's sign-ups -------------------------------------------------
+
+
+def render_with_signups(names, month="2026-09"):
+    return render.render_results([row()], month, NOW, 100, names)
+
+
+def test_signups_are_listed_under_the_table_for_the_month_after():
+    (message,) = render_with_signups(["Alice", "bob"])
+    assert message.endswith("100GOB sign-ups for October 2026: `Alice`, `bob`")
+
+
+def test_no_signups_means_no_line():
+    assert "sign-ups" not in render_with_signups([])[0]
+
+
+def test_december_signups_are_for_january_of_the_next_year():
+    assert "100GOB sign-ups for January 2027: `a`" in render_with_signups(["a"], month="2026-12")[0]
+
+
+def test_a_long_signup_list_wraps_onto_short_lines_and_names_every_player_once():
+    names = [f"player_{i:03d}" for i in range(150)]
+    messages = render_with_signups(names)
+    assert all(len(m) <= 2000 for m in messages)
+    text = "\n".join(messages)
+    assert all(text.count(f"`{n}`") == 1 for n in names)
+    signup_lines = [ln for ln in text.splitlines() if "`player_" in ln]
+    assert all(len(ln) <= 110 for ln in signup_lines)  # wrapped, not one enormous line
+
+
 # --- long tables -----------------------------------------------------------
 
 

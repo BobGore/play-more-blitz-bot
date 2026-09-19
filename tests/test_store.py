@@ -230,6 +230,124 @@ def test_results_carries_the_counts_the_flag_and_the_refresh_state():
     assert (r.refreshed_at, r.refresh_error) == ("2026-09-05T12:30:00+00:00", "site down")
 
 
+def test_joining_100gob_sets_the_flag_once():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    assert store.month_row("chess.com", "alice", "2026-09")["in_100gob"] == 0
+    assert store.join_100gob("chess.com", "alice", "2026-09") == store.JOINED
+    assert store.month_row("chess.com", "alice", "2026-09")["in_100gob"] == 1
+    assert store.join_100gob("chess.com", "alice", "2026-09") == store.ALREADY
+
+
+def test_joining_matches_the_username_case_insensitively():
+    store.add_player("chess.com", "Alice", ALICE, "2026-09", 1500)
+    assert store.join_100gob("chess.com", "ALICE", "2026-09") == store.JOINED
+
+
+def test_joining_only_touches_that_player_and_that_month():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.add_player("lichess", "alice", ALICE, "2026-09", 1400)
+    store.add_player("chess.com", "bob", BOB, "2026-09", 1300)
+    store.join_100gob("chess.com", "alice", "2026-09")
+    flags = {(r.site, r.username): r.in_100gob for r in store.results("2026-09")}
+    assert flags == {("chess.com", "alice"): True, ("lichess", "alice"): False, ("chess.com", "bob"): False}
+
+
+def test_a_new_months_row_starts_out_of_the_challenge_so_players_opt_in_afresh():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.join_100gob("chess.com", "alice", "2026-09")
+    store.remove_player("chess.com", "alice")
+    store.add_player("chess.com", "alice", ALICE, "2026-10", 1520)  # a later month gets a fresh row
+    assert store.month_row("chess.com", "alice", "2026-10")["in_100gob"] == 0
+    assert store.month_row("chess.com", "alice", "2026-09")["in_100gob"] == 1  # history untouched
+
+
+def test_joining_a_closed_month_or_as_an_unregistered_or_removed_player_is_refused():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    assert store.join_100gob("chess.com", "ghost", "2026-09") == store.NO_ROW  # not registered
+    with store._transaction() as conn:
+        conn.execute("UPDATE monthly_results SET closed_at = '2026-10-01T09:00:00+00:00'")
+    assert store.join_100gob("chess.com", "alice", "2026-09") == store.NO_ROW  # closed
+    assert store.month_row("chess.com", "alice", "2026-09")["in_100gob"] == 0
+    store.remove_player("chess.com", "alice")
+    assert store.join_100gob("chess.com", "alice", "2026-10") == store.NO_ROW  # removed
+
+
+def test_joining_a_month_with_no_row_yet_remembers_the_sign_up():
+    store.add_player("chess.com", "Alice", ALICE, "2026-09", 1500)
+    assert store.signups("2026-10") == []
+    assert store.join_100gob("chess.com", "alice", "2026-10") == store.JOINED
+    assert store.join_100gob("chess.com", "alice", "2026-10") == store.ALREADY
+    assert store.signups("2026-10") == ["Alice"]
+    assert store.month_row("chess.com", "alice", "2026-10") is None  # no row is invented
+
+
+def test_a_sign_up_is_applied_and_used_up_when_the_months_row_is_created():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.add_player("chess.com", "bob", BOB, "2026-09", 1400)
+    store.join_100gob("chess.com", "alice", "2026-10")
+    with store._transaction() as conn:
+        assert store._open_month(conn, "chess.com", "alice", "2026-10", 1525) is True
+        assert store._open_month(conn, "chess.com", "bob", "2026-10", 1410) is True
+    assert store.month_row("chess.com", "alice", "2026-10")["in_100gob"] == 1  # signed up: starts in
+    assert store.month_row("chess.com", "bob", "2026-10")["in_100gob"] == 0  # not: starts out
+    assert store.signups("2026-10") == []  # consumed
+    assert store.month_row("chess.com", "alice", "2026-10")["start_rating"] == 1525
+
+
+def test_opening_a_month_that_already_has_a_row_changes_nothing():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    with store._transaction() as conn:
+        assert store._open_month(conn, "chess.com", "alice", "2026-09", 9999) is False
+    assert store.month_row("chess.com", "alice", "2026-09")["start_rating"] == 1500
+
+
+def test_a_player_who_signed_up_gets_the_flag_when_readded_into_that_month():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.join_100gob("chess.com", "alice", "2026-10")
+    store.remove_player("chess.com", "alice")
+    assert store.signups("2026-10") == []  # a removed player isn't listed
+    store.add_player("chess.com", "alice", ALICE, "2026-10", 1520)  # back in October
+    assert store.month_row("chess.com", "alice", "2026-10")["in_100gob"] == 1
+
+
+def test_sign_ups_for_different_months_are_independent():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.join_100gob("chess.com", "alice", "2026-10")
+    store.join_100gob("chess.com", "alice", "2026-11")
+    assert store.signups("2026-10") == ["alice"]
+    assert store.signups("2026-11") == ["alice"]
+    with store._transaction() as conn:
+        store._open_month(conn, "chess.com", "alice", "2026-10", 1500)
+    assert store.signups("2026-10") == [] and store.signups("2026-11") == ["alice"]  # only October's was used up
+
+
+def test_signups_are_listed_in_name_order_across_sites():
+    for site_name, name in (("lichess", "zed"), ("chess.com", "Amy"), ("lichess", "bob")):
+        store.add_player(site_name, name, ALICE, "2026-09", 1500)
+        store.join_100gob(site_name, name, "2026-10")
+    assert store.signups("2026-10") == ["Amy", "bob", "zed"]
+
+
+def test_an_announcement_can_be_claimed_only_once_and_released_to_try_again():
+    assert store.claim_announcement("signup_call", "2026-10", "2026-09-24T08:00:00+00:00") is True
+    assert store.claim_announcement("signup_call", "2026-10", "2026-09-24T08:05:00+00:00") is False
+    assert store.claim_announcement("signup_call", "2026-11", "2026-10-25T09:00:00+00:00") is True  # another month
+    assert store.claim_announcement("something_else", "2026-10", "2026-09-24T08:00:00+00:00") is True  # another kind
+    store.release_announcement("signup_call", "2026-10")
+    assert store.claim_announcement("signup_call", "2026-10", "2026-09-24T08:10:00+00:00") is True
+
+
+def test_accounts_of_lists_only_that_owners_active_accounts_in_order():
+    store.add_player("lichess", "zoe_li", ALICE, "2026-09", 1400)
+    store.add_player("chess.com", "amy_cc", ALICE, "2026-09", 1500)
+    store.add_player("chess.com", "bobs", BOB, "2026-09", 1300)
+    store.add_player("chess.com", "gone", ALICE, "2026-09", 1200)
+    store.remove_player("chess.com", "gone")
+    assert [(p.username, p.site) for p in store.accounts_of(ALICE)] == [("amy_cc", "chess.com"), ("zoe_li", "lichess")]
+    assert [p.username for p in store.accounts_of(BOB)] == ["bobs"]
+    assert store.accounts_of(999) == []
+
+
 def test_a_month_row_needs_its_player():
     with pytest.raises(sqlite3.IntegrityError):
         with store._transaction() as conn:

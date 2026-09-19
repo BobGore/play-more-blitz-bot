@@ -69,12 +69,19 @@ def _last_refreshed(rows):
     return min(stamps) if stamps else None
 
 
-def render_results(rows, month, now, target):
+def _next_month_title(month):
+    start = datetime.strptime(month, "%Y-%m")
+    following = datetime(start.year + (start.month == 12), start.month % 12 + 1, 1)
+    return following.strftime("%B %Y")
+
+
+def render_results(rows, month, now, target, signups=()):
     """The `!results` table for a month as a list of messages, ready to send in order.
 
     Everyone registered is shown, most games first. A ! before a name means its
     latest refresh failed (the reason is listed underneath); a ? means nothing has
-    been counted for it yet.
+    been counted for it yet. `signups` are the players already signed up for the
+    month after this one, listed under the table.
     """
     rows = sorted(rows, key=_sort_key)
     title = f"**{month_title(month)} so far**"
@@ -102,7 +109,23 @@ def render_results(rows, month, now, target):
         )
 
     footer = _footer(rows, now)
+    if signups:
+        footer += _signup_lines(_next_month_title(month), signups)
     return _split(title, header, rule, lines, footer)
+
+
+def _signup_lines(month_title_, names, width=100):
+    """"100GOB sign-ups for <month>: a, b, c" wrapped onto several short lines, so the
+    footer can be split between messages on a line break without cutting a name."""
+    lines, current = [], f"100GOB sign-ups for {month_title_}:"
+    for name in names:
+        piece = f" `{name}`,"
+        if len(current) + len(piece) > width:
+            lines.append(current)
+            current = "  "
+        current += piece
+    lines.append(current.rstrip(","))
+    return "\n" + "\n".join(lines)
 
 
 def _footer(rows, now):

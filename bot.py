@@ -14,6 +14,7 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
+import announce
 import refresh
 import render
 import sources
@@ -46,9 +47,15 @@ REFRESH_INTERVAL_MINUTES = 30
 # The 100GOB challenge: games in the month that earn the tick.
 GOB_TARGET = 100
 
+# Where the bot's own scheduled posts go (the 100GOB sign-up call now, the month-end
+# table later). The test channel for now.
+POST_CHANNEL_ID = 1550558058793533471
+
 USAGE = {
     "add": "!add <username> <site>   (site is chess.com or lichess)",
     "remove": "!remove <username> [site]",
+    "100gob": "!100gob [username] [site]",
+    "100gobnext": "!100gobnext [username] [site]",
 }
 
 intents = discord.Intents.default()
@@ -78,6 +85,34 @@ async def refresh_loop():
         log.exception("refresh cycle crashed")
 
 
+async def post_signup_call_if_due():
+    """Post the 100GOB sign-up call if it is due and hasn't been posted for that month. Returns whether it posted."""
+    now = datetime.now(timezone.utc)
+    month = announce.signup_call_due(now)
+    if month is None:
+        return False
+    if not await asyncio.to_thread(store.claim_announcement, "signup_call", month, now.isoformat()):
+        return False  # already posted, perhaps before a restart
+    try:
+        channel = bot.get_channel(POST_CHANNEL_ID) or await bot.fetch_channel(POST_CHANNEL_ID)
+        await channel.send(announce.signup_call_text(month, GOB_TARGET))
+    except Exception:
+        log.exception("couldn't post the 100GOB sign-up call for %s", month)
+        await asyncio.to_thread(store.release_announcement, "signup_call", month)  # so the next try can post it
+        return False
+    log.info("posted the 100GOB sign-up call for %s", month)
+    return True
+
+
+@tasks.loop(time=announce.POST_TIME)
+async def daily_posts():
+    """Every day at 9am UK time."""
+    try:
+        await post_signup_call_if_due()
+    except Exception:
+        log.exception("scheduled posts crashed")
+
+
 _background = set()  # keeps a reference to running tasks so they aren't garbage collected
 
 
@@ -95,6 +130,12 @@ async def on_ready():
         log.warning("CONTACT is not set: site requests carry no contact address (see .env.example)")
     if not refresh_loop.is_running():  # on_ready can fire again after a reconnect
         refresh_loop.start()
+    if not daily_posts.is_running():
+        daily_posts.start()
+        try:
+            await post_signup_call_if_due()  # catch up if the bot was down when a post was due
+        except Exception:
+            log.exception("catch-up posts crashed")
 
 
 @bot.check
@@ -131,6 +172,8 @@ async def help_blitz_bot(ctx):
         "`!remove <username> [site]` - takes a player off the list (whoever added them, or an admin)\n"
         "`!results` - this month so far for everyone on the list (refreshed every "
         f"{REFRESH_INTERVAL_MINUTES} minutes)\n"
+        f"`!100gob [username]` - join this month's challenge: {GOB_TARGET} games of blitz\n"
+        "`!100gobnext [username]` - sign up for next month's challenge\n"
         "More commands are coming."
     )
 
@@ -201,13 +244,80 @@ async def remove(ctx, username: str, site: Optional[str] = None):
     await ctx.message.add_reaction("✅")
 
 
+async def _join_challenge(ctx, username, site, month, when, command):
+    """Shared by !100gob (this month) and !100gobnext (next month).
+
+    `when` is how a reply refers to the month ("this month", or its name) and
+    `command` is the command's own name, for the examples in replies.
+    """
+    if site is not None:
+        site = site.lower()
+        if site not in sources.SITES:
+            await _reject(ctx, "the site must be `chess.com` or `lichess`")
+            return
+
+    if username is None:
+        mine = await asyncio.to_thread(store.accounts_of, ctx.author.id)
+        if not mine:
+            await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` first")
+            return
+        if len(mine) > 1:
+            names = ", ".join(f"{p.username} ({p.site})" for p in mine)
+            await _reject(ctx, f"you have {len(mine)} accounts: {names} - say which, e.g. `!{command} {mine[0].username} {mine[0].site}`")
+            return
+        player = mine[0]
+    else:
+        matches = await asyncio.to_thread(store.find_active, username, site)
+        if not matches:
+            await _reject(ctx, f"'{username}' isn't on the list")
+            return
+        if len(matches) > 1:
+            sites = " and ".join(m.site for m in matches)
+            await _reject(ctx, f"{username} is on the list for {sites} - say which, e.g. `!{command} {username} {matches[0].site}`")
+            return
+        player = matches[0]
+        if not _is_admin(ctx.author.id) and player.added_by != ctx.author.id:
+            await _reject(ctx, f"only whoever added {player.username}, or an admin, can put them in 100GOB")
+            return
+
+    outcome = await asyncio.to_thread(store.join_100gob, player.site, player.username, month)
+    if outcome == store.ALREADY:
+        await _reject(ctx, f"{player.username} is already in 100GOB {when}")
+        return
+    if outcome == store.NO_ROW:  # they were found active a moment ago, so the month must be closed
+        await _reject(ctx, f"{render.month_title(month)} is already closed for {player.username}")
+        return
+    log.info("100GOB: %s on %s in for %s (by %s)", player.username, player.site, month, ctx.author.id)
+    await ctx.message.add_reaction("✅")
+
+
+@bot.command(name="100gob")
+async def gob(ctx, username: Optional[str] = None, site: Optional[str] = None):
+    """Join this month's 100GOB challenge. If the month's row doesn't exist yet the
+    sign-up is kept and applied when it is created."""
+    await _join_challenge(ctx, username, site, sources.current_month(), "this month", "100gob")
+
+
+@bot.command(name="100gobnext")
+async def gob_next(ctx, username: Optional[str] = None, site: Optional[str] = None):
+    """Sign up for next month's 100GOB challenge (next month means the month after the current UTC month)."""
+    month = sources.next_month(sources.current_month())
+    await _join_challenge(ctx, username, site, month, f"for {render.month_title(month)}", "100gobnext")
+
+
 @bot.command()
 async def results(ctx):
     """This month so far, from the stored totals. Makes no calls to the chess sites."""
     month = sources.current_month()
     rows = await asyncio.to_thread(store.results, month)
-    for message in render.render_results(rows, month, datetime.now(timezone.utc), GOB_TARGET):
+    signed_up = await asyncio.to_thread(store.signups, sources.next_month(month))
+    for message in render.render_results(rows, month, datetime.now(timezone.utc), GOB_TARGET, signed_up):
         await ctx.send(message)
+
+
+@bot.event
+async def on_command(ctx):
+    log.info("command !%s from %s in channel %s", ctx.command.qualified_name, ctx.author.id, ctx.channel.id)
 
 
 @bot.event
@@ -217,8 +327,11 @@ async def on_command_error(ctx, error):
         await _reject(ctx, f"Usage: `{usage}`" if usage else "I didn't understand that")
     elif isinstance(error, commands.CommandOnCooldown):
         await _reject(ctx, f"slow down - try again in {error.retry_after:.0f}s")
-    elif isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
-        pass
+    elif isinstance(error, commands.CommandNotFound):
+        # Silent in Discord (the bot shouldn't answer every "!" message), but say so in the log.
+        log.info("ignored: no command called !%s (channel %s)", ctx.invoked_with, ctx.channel.id)
+    elif isinstance(error, commands.CheckFailure):
+        log.info("ignored: !%s in channel %s, which is not an allowed channel", ctx.invoked_with, ctx.channel.id)
     else:
         log.exception("command failed", exc_info=error)
         await _reject(ctx, "something went wrong, check the logs")

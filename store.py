@@ -16,6 +16,10 @@ ADDED = "added"
 REACTIVATED = "reactivated"
 EXISTS = "exists"
 
+JOINED = "joined"  # opted in to 100GOB just now
+ALREADY = "already"  # was already in it this month
+NO_ROW = "no_row"  # no open row for that month, so nothing to opt in
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS players (
     site      TEXT NOT NULL,
@@ -41,6 +45,24 @@ CREATE TABLE IF NOT EXISTS monthly_results (
     closed_at    TEXT,                    -- set when the month has been closed
     refreshed_at  TEXT,                   -- the last successful refresh
     refresh_error TEXT,                   -- why the latest refresh failed; NULL once one succeeds
+    PRIMARY KEY (site, username, month),
+    FOREIGN KEY (site, username) REFERENCES players (site, username)
+);
+
+-- Things the bot has posted on a schedule, so a restart never posts one twice.
+CREATE TABLE IF NOT EXISTS announcements (
+    kind      TEXT NOT NULL,
+    month     TEXT NOT NULL,
+    posted_at TEXT NOT NULL,
+    PRIMARY KEY (kind, month)
+);
+
+-- Sign-ups for a month whose row doesn't exist yet (next month, or a new month before
+-- its row is created). Applied, and removed, when the row is created.
+CREATE TABLE IF NOT EXISTS gob_signups (
+    site     TEXT NOT NULL,
+    username TEXT NOT NULL COLLATE NOCASE,
+    month    TEXT NOT NULL,
     PRIMARY KEY (site, username, month),
     FOREIGN KEY (site, username) REFERENCES players (site, username)
 );
@@ -129,6 +151,84 @@ def active_players():
     return [_player(r) for r in rows]
 
 
+def accounts_of(owner):
+    """The active players registered by (owned by) this Discord user."""
+    with _transaction() as conn:
+        rows = conn.execute(
+            "SELECT * FROM players WHERE added_by = ? AND active = 1 ORDER BY username, site", (owner,)
+        ).fetchall()
+    return [_player(r) for r in rows]
+
+
+def join_100gob(site, username, month):
+    """Put an active player into the 100GOB challenge for `month`. Returns JOINED, ALREADY or NO_ROW.
+
+    If the month's row exists the flag is set on it. If it doesn't yet (next month, or
+    a new month before its row is created) the sign-up is remembered and applied when
+    the row is created. A new month's row otherwise starts with the flag off, so
+    players opt in afresh each month. NO_ROW means the player isn't registered, or the
+    month is already closed.
+    """
+    key = (site, username)
+    with _transaction() as conn:
+        if not conn.execute("SELECT 1 FROM players WHERE site = ? AND username = ? AND active = 1", key).fetchone():
+            return NO_ROW
+        row = conn.execute(
+            "SELECT in_100gob, closed_at FROM monthly_results WHERE site = ? AND username = ? AND month = ?", (*key, month)
+        ).fetchone()
+        if row is not None:
+            if row["closed_at"]:
+                return NO_ROW
+            if row["in_100gob"]:
+                return ALREADY
+            conn.execute("UPDATE monthly_results SET in_100gob = 1 WHERE site = ? AND username = ? AND month = ?", (*key, month))
+            return JOINED
+        cur = conn.execute("INSERT OR IGNORE INTO gob_signups (site, username, month) VALUES (?, ?, ?)", (*key, month))
+        return JOINED if cur.rowcount else ALREADY
+
+
+def signups(month):
+    """Usernames of active players signed up for `month` before its row exists, in name order."""
+    with _transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.username FROM gob_signups s
+            JOIN players p ON p.site = s.site AND p.username = s.username
+            WHERE s.month = ? AND p.active = 1 ORDER BY p.username COLLATE NOCASE, p.site
+            """,
+            (month,),
+        ).fetchall()
+    return [r["username"] for r in rows]
+
+
+def claim_announcement(kind, month, now):
+    """Reserve the right to post `kind` for `month`. True if this call got it, False if it was already posted."""
+    with _transaction() as conn:
+        cur = conn.execute("INSERT OR IGNORE INTO announcements (kind, month, posted_at) VALUES (?, ?, ?)", (kind, month, now))
+        return cur.rowcount == 1
+
+
+def release_announcement(kind, month):
+    """Give the claim back (the post failed), so the next attempt can try again."""
+    with _transaction() as conn:
+        conn.execute("DELETE FROM announcements WHERE kind = ? AND month = ?", (kind, month))
+
+
+def _open_month(conn, site, username, month, start_rating):
+    """Create a player's row for a month, unless it exists. A sign-up for that month is
+    applied (the flag starts on) and used up. True if a row was created."""
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO monthly_results (site, username, month, start_rating, end_rating, in_100gob)
+        VALUES (?, ?, ?, ?, ?, EXISTS (SELECT 1 FROM gob_signups WHERE site = ? AND username = ? AND month = ?))
+        """,
+        (site, username, month, start_rating, start_rating, site, username, month),
+    )
+    if cur.rowcount:
+        conn.execute("DELETE FROM gob_signups WHERE site = ? AND username = ? AND month = ?", (site, username, month))
+    return cur.rowcount == 1
+
+
 def add_player(site, username, owner, month, start_rating):
     """Register a player, or bring a removed one back, and make sure `month` has a row.
 
@@ -159,10 +259,7 @@ def add_player(site, username, owner, month, start_rating):
             )
             outcome = REACTIVATED
 
-        conn.execute(
-            "INSERT OR IGNORE INTO monthly_results (site, username, month, start_rating, end_rating) VALUES (?, ?, ?, ?, ?)",
-            (site, username, month, start_rating, start_rating),
-        )
+        _open_month(conn, site, username, month, start_rating)
     return outcome
 
 
