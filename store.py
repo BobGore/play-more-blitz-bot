@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS monthly_results (
     in_100gob    INTEGER NOT NULL DEFAULT 0,
     last_game_at TEXT,                    -- end of the last game counted: the watermark
     closed_at    TEXT,                    -- set when the month has been closed
+    refreshed_at  TEXT,                   -- the last successful refresh
+    refresh_error TEXT,                   -- why the latest refresh failed; NULL once one succeeds
     PRIMARY KEY (site, username, month),
     FOREIGN KEY (site, username) REFERENCES players (site, username)
 );
@@ -53,6 +55,36 @@ class Player:
     active: bool
 
 
+@dataclass(frozen=True)
+class ResultRow:
+    """One active player's line for a month, as !results shows it."""
+
+    site: str
+    username: str
+    has_row: bool  # False if the player has no row for this month yet
+    start_rating: int | None
+    end_rating: int | None
+    games: int
+    wins: int
+    draws: int
+    losses: int
+    in_100gob: bool
+    refreshed_at: str | None  # ISO time of the last successful refresh; None if never
+    refresh_error: str | None  # why the latest refresh failed, if it did
+
+
+# Columns added to monthly_results after the first version. A database made by an
+# earlier version gets them on its next connection.
+_ADDED_COLUMNS = ("refreshed_at", "refresh_error")
+
+
+def _migrate(conn):
+    have = {row["name"] for row in conn.execute("PRAGMA table_info(monthly_results)")}
+    for column in _ADDED_COLUMNS:
+        if column not in have:
+            conn.execute(f"ALTER TABLE monthly_results ADD COLUMN {column} TEXT")
+
+
 @contextmanager
 def _transaction():
     """One connection, committed on success and rolled back on error, always closed."""
@@ -62,6 +94,7 @@ def _transaction():
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(SCHEMA)
         with conn:
+            _migrate(conn)
             yield conn
     finally:
         conn.close()
@@ -138,6 +171,61 @@ def remove_player(site, username):
     with _transaction() as conn:
         cur = conn.execute("UPDATE players SET active = 0 WHERE site = ? AND username = ? AND active = 1", (site, username))
         return cur.rowcount > 0
+
+
+def results(month):
+    """One ResultRow per active player for `month`, in no particular order.
+
+    A player with no row for that month still appears, with has_row False.
+    """
+    with _transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.site, p.username, m.site IS NOT NULL AS has_row, m.start_rating, m.end_rating,
+                   COALESCE(m.games, 0) AS games, COALESCE(m.wins, 0) AS wins,
+                   COALESCE(m.draws, 0) AS draws, COALESCE(m.losses, 0) AS losses,
+                   COALESCE(m.in_100gob, 0) AS in_100gob, m.refreshed_at, m.refresh_error
+            FROM players p
+            LEFT JOIN monthly_results m ON m.site = p.site AND m.username = p.username AND m.month = ?
+            WHERE p.active = 1
+            """,
+            (month,),
+        ).fetchall()
+    return [
+        ResultRow(r["site"], r["username"], bool(r["has_row"]), r["start_rating"], r["end_rating"], r["games"], r["wins"],
+                  r["draws"], r["losses"], bool(r["in_100gob"]), r["refreshed_at"], r["refresh_error"])
+        for r in rows
+    ]
+
+
+def apply_refresh(site, username, month, *, expected_watermark, games, wins, draws, losses, end_rating, last_game_at, now):
+    """Add a refresh's new games to a month's running totals, in one step.
+
+    `expected_watermark` is the last_game_at the caller read before fetching. If the
+    row has moved on since (another refresh got there first) nothing is written and
+    this returns False, so the same games can never be counted twice. A closed month
+    is never touched. On success the last error is cleared.
+    """
+    with _transaction() as conn:
+        cur = conn.execute(
+            """
+            UPDATE monthly_results
+            SET games = games + ?, wins = wins + ?, draws = draws + ?, losses = losses + ?,
+                end_rating = ?, last_game_at = ?, refreshed_at = ?, refresh_error = NULL
+            WHERE site = ? AND username = ? AND month = ? AND closed_at IS NULL AND last_game_at IS ?
+            """,
+            (games, wins, draws, losses, end_rating, last_game_at, now, site, username, month, expected_watermark),
+        )
+        return cur.rowcount == 1
+
+
+def record_refresh_error(site, username, month, message):
+    """Note why the latest refresh failed. The totals and last-success time stay as they were."""
+    with _transaction() as conn:
+        conn.execute(
+            "UPDATE monthly_results SET refresh_error = ? WHERE site = ? AND username = ? AND month = ? AND closed_at IS NULL",
+            (message[:200], site, username, month),
+        )
 
 
 def month_row(site, username, month):

@@ -25,6 +25,14 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
 
 
+@pytest.fixture(autouse=True)
+def refreshes(monkeypatch):
+    """Record the background refreshes !add asks for instead of really starting them."""
+    started = []
+    monkeypatch.setattr(botmod, "_start_refresh", lambda site_name, username: started.append((site_name, username)))
+    return started
+
+
 @pytest.fixture
 def site(monkeypatch):
     """Fake site lookups: every account exists and starts at 1500 unless told otherwise."""
@@ -88,6 +96,19 @@ def test_add_registers_the_player_for_the_caller_and_reacts_with_a_tick(site):
     row = store.month_row("chess.com", "alice_cc", sources.current_month())
     assert row["start_rating"] == 1500
     assert site["calls"] == [("chess.com", "alice_cc", sources.current_month())]
+
+
+def test_a_successful_add_starts_a_refresh_for_that_player_so_they_show_up_promptly(site, refreshes):
+    site["names"]["alice"] = "Alice"
+    run(botmod.add, make_ctx(ALICE), "ALICE", "chess.com")
+    assert refreshes == [("chess.com", "Alice")]  # under the site's spelling
+
+
+def test_a_refused_add_starts_no_refresh(site, refreshes):
+    site["error"] = sources.NoSuchUser("no chess.com account 'ghost'")
+    run(botmod.add, make_ctx(ALICE), "ghost", "chess.com")
+    run(botmod.add, make_ctx(ALICE), "alice", "example.org")
+    assert refreshes == []
 
 
 def test_add_stores_the_sites_own_spelling_not_what_was_typed(site):
@@ -287,6 +308,36 @@ def test_remove_rejects_an_unknown_site(site):
     run(botmod.remove, ctx, "alice", "example.org")
     assert reactions(ctx) == [NO] and "chess.com" in said(ctx)[0]
     assert store.find_active("alice") != []
+
+
+# --- !results --------------------------------------------------------------
+
+
+def test_results_with_nobody_registered(site):
+    ctx = make_ctx(ALICE)
+    run(botmod.results, ctx)
+    assert reactions(ctx) == [] and "Nobody is registered yet" in said(ctx)[0]
+
+
+def test_results_shows_the_stored_totals_and_calls_no_site(site):
+    month = sources.current_month()
+    store.add_player("chess.com", "Alice", ALICE, month, 1500)
+    store.apply_refresh("chess.com", "Alice", month, expected_watermark=None, games=12, wins=7, draws=1, losses=4,
+                        end_rating=1524, last_game_at="2026-09-05T12:00:00+00:00", now="2026-09-05T12:30:00+00:00")
+    ctx = make_ctx(BOB)  # anyone can ask
+    run(botmod.results, ctx)
+    text = "\n".join(said(ctx))
+    assert "Alice" in text and "7-1-4" in text and "+24" in text
+    assert site["calls"] == []  # read from the database only
+
+
+def test_results_sends_every_message_of_a_long_table_in_order(site):
+    month = sources.current_month()
+    for i in range(120):
+        store.add_player("chess.com", f"player_{i:03d}", ALICE, month, 1500)
+    ctx = make_ctx(ALICE)
+    run(botmod.results, ctx)
+    assert len(said(ctx)) > 1 and all(len(m) <= 2000 for m in said(ctx))
 
 
 # --- error handler ---------------------------------------------------------

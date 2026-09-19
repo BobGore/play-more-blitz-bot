@@ -110,6 +110,126 @@ def test_unknown_lookups_return_none_or_empty():
     assert store.month_row("chess.com", "nobody", "2026-09") is None
 
 
+OLD_SCHEMA = """
+CREATE TABLE players (
+    site TEXT NOT NULL, username TEXT NOT NULL COLLATE NOCASE, added_by INTEGER NOT NULL,
+    added_at TEXT NOT NULL DEFAULT (datetime('now')), active INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (site, username));
+CREATE TABLE monthly_results (
+    site TEXT NOT NULL, username TEXT NOT NULL COLLATE NOCASE, month TEXT NOT NULL,
+    start_rating INTEGER NOT NULL, end_rating INTEGER NOT NULL,
+    games INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0, draws INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0, in_100gob INTEGER NOT NULL DEFAULT 0, last_game_at TEXT, closed_at TEXT,
+    PRIMARY KEY (site, username, month), FOREIGN KEY (site, username) REFERENCES players (site, username));
+INSERT INTO players (site, username, added_by) VALUES ('chess.com', 'Alice', 1001);
+INSERT INTO monthly_results (site, username, month, start_rating, end_rating, games, wins)
+    VALUES ('chess.com', 'Alice', '2026-09', 1500, 1510, 4, 3);
+"""
+
+
+def test_a_database_from_the_first_version_is_upgraded_in_place_and_keeps_its_data():
+    conn = sqlite3.connect(store.DB_PATH)
+    conn.executescript(OLD_SCHEMA)
+    conn.commit()
+    conn.close()
+
+    row = store.month_row("chess.com", "alice", "2026-09")  # the first connection migrates
+    assert (row["games"], row["wins"], row["end_rating"]) == (4, 3, 1510)  # nothing lost
+    assert row["refreshed_at"] is None and row["refresh_error"] is None  # the new columns exist
+    assert store.get_player("chess.com", "alice").active is True
+
+    assert store.month_row("chess.com", "alice", "2026-09")["games"] == 4  # a second connection is fine too
+    (result,) = store.results("2026-09")
+    assert (result.username, result.games) == ("Alice", 4)
+
+
+def add_alice(month="2026-09"):
+    store.add_player("chess.com", "alice", ALICE, month, 1500)
+
+
+def refresh_args(**overrides):
+    args = dict(expected_watermark=None, games=2, wins=1, draws=0, losses=1, end_rating=1490,
+                last_game_at="2026-09-05T12:00:00+00:00", now="2026-09-05T12:30:00+00:00")
+    args.update(overrides)
+    return args
+
+
+def test_apply_refresh_adds_to_the_totals_and_moves_the_watermark():
+    add_alice()
+    assert store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args()) is True
+    assert store.apply_refresh(
+        "chess.com", "alice", "2026-09",
+        **refresh_args(expected_watermark="2026-09-05T12:00:00+00:00", games=3, wins=2, draws=1, losses=0,
+                       end_rating=1520, last_game_at="2026-09-06T09:00:00+00:00"),
+    ) is True
+    row = store.month_row("chess.com", "alice", "2026-09")
+    assert (row["games"], row["wins"], row["draws"], row["losses"]) == (5, 3, 1, 1)  # added, not replaced
+    assert (row["end_rating"], row["last_game_at"]) == (1520, "2026-09-06T09:00:00+00:00")
+    assert row["start_rating"] == 1500  # never moves
+
+
+def test_a_refresh_with_a_stale_watermark_is_refused_so_games_are_never_counted_twice():
+    add_alice()
+    assert store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args()) is True
+    # A second refresh that read the row before the first one finished still expects "no watermark".
+    assert store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args()) is False
+    assert store.month_row("chess.com", "alice", "2026-09")["games"] == 2
+
+
+def test_apply_refresh_clears_the_previous_error_and_stamps_the_time():
+    add_alice()
+    store.record_refresh_error("chess.com", "alice", "2026-09", "couldn't reach chess.com")
+    assert store.month_row("chess.com", "alice", "2026-09")["refresh_error"] == "couldn't reach chess.com"
+    store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args(games=0, wins=0, losses=0, end_rating=1500, last_game_at=None))
+    row = store.month_row("chess.com", "alice", "2026-09")
+    assert row["refresh_error"] is None and row["refreshed_at"] == "2026-09-05T12:30:00+00:00"
+
+
+def test_an_error_leaves_the_totals_and_last_success_time_alone():
+    add_alice()
+    store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args())
+    store.record_refresh_error("chess.com", "alice", "2026-09", "x" * 500)
+    row = store.month_row("chess.com", "alice", "2026-09")
+    assert (row["games"], row["refreshed_at"]) == (2, "2026-09-05T12:30:00+00:00")
+    assert len(row["refresh_error"]) == 200  # capped
+
+
+def test_a_closed_month_is_never_touched():
+    add_alice()
+    with store._transaction() as conn:
+        conn.execute("UPDATE monthly_results SET closed_at = '2026-10-01T09:00:00+00:00'")
+    assert store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args()) is False
+    store.record_refresh_error("chess.com", "alice", "2026-09", "late")
+    row = store.month_row("chess.com", "alice", "2026-09")
+    assert (row["games"], row["refresh_error"]) == (0, None)
+
+
+def test_refreshing_a_player_with_no_row_writes_nothing():
+    assert store.apply_refresh("chess.com", "ghost", "2026-09", **refresh_args()) is False
+
+
+def test_results_lists_active_players_including_ones_with_no_row_for_the_month():
+    add_alice("2026-09")
+    store.add_player("lichess", "bob", BOB, "2026-08", 1400)  # a row for August only
+    store.add_player("chess.com", "gone", BOB, "2026-09", 1300)
+    store.remove_player("chess.com", "gone")
+    by_name = {r.username: r for r in store.results("2026-09")}
+    assert set(by_name) == {"alice", "bob"}  # removed players are not shown
+    assert by_name["alice"].has_row is True and by_name["alice"].start_rating == 1500
+    assert by_name["bob"].has_row is False and (by_name["bob"].games, by_name["bob"].start_rating) == (0, None)
+
+
+def test_results_carries_the_counts_the_flag_and_the_refresh_state():
+    add_alice()
+    store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args(games=10, wins=6, draws=1, losses=3, end_rating=1530))
+    with store._transaction() as conn:
+        conn.execute("UPDATE monthly_results SET in_100gob = 1")
+    store.record_refresh_error("chess.com", "alice", "2026-09", "site down")
+    (r,) = store.results("2026-09")
+    assert (r.games, r.wins, r.draws, r.losses, r.end_rating, r.in_100gob) == (10, 6, 1, 3, 1530, True)
+    assert (r.refreshed_at, r.refresh_error) == ("2026-09-05T12:30:00+00:00", "site down")
+
+
 def test_a_month_row_needs_its_player():
     with pytest.raises(sqlite3.IntegrityError):
         with store._transaction() as conn:

@@ -1,18 +1,21 @@
 """PlayMoreBlitz Discord bot.
 
 Nudges members to play more blitz: monthly rated-blitz game counts per player.
-Commands so far: !add, !remove and a help command. The rest come in later steps.
+Commands so far: !add, !remove, !results and a help command. The rest come in later steps.
 """
 
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 import aiohttp
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+import refresh
+import render
 import sources
 import store
 
@@ -37,6 +40,12 @@ ADMIN_USER_IDS = {
 # many seconds, so nobody can hammer the sites through the bot.
 COOLDOWN_SECONDS = 600
 
+# How often the background refresher brings every player's totals up to date.
+REFRESH_INTERVAL_MINUTES = 30
+
+# The 100GOB challenge: games in the month that earn the tick.
+GOB_TARGET = 100
+
 USAGE = {
     "add": "!add <username> <site>   (site is chess.com or lichess)",
     "remove": "!remove <username> [site]",
@@ -59,11 +68,33 @@ bot = commands.Bot(
 )
 
 
+@tasks.loop(minutes=REFRESH_INTERVAL_MINUTES)
+async def refresh_loop():
+    """Every REFRESH_INTERVAL_MINUTES, and once as soon as it starts (so a restart is never stale)."""
+    try:
+        outcomes = await refresh.refresh_all(sources.current_month())
+        log.info("refresh cycle finished: %s", outcomes or "nobody registered")
+    except Exception:  # one bad cycle must not stop the loop
+        log.exception("refresh cycle crashed")
+
+
+_background = set()  # keeps a reference to running tasks so they aren't garbage collected
+
+
+def _start_refresh(site, username):
+    """Refresh one player in the background, so a new player shows up without waiting for the next cycle."""
+    task = asyncio.create_task(refresh.refresh_one(site, username))
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
 @bot.event
 async def on_ready():
     log.info("connected as %s", bot.user)
     if not sources.CONTACT:
         log.warning("CONTACT is not set: site requests carry no contact address (see .env.example)")
+    if not refresh_loop.is_running():  # on_ready can fire again after a reconnect
+        refresh_loop.start()
 
 
 @bot.check
@@ -98,6 +129,8 @@ async def help_blitz_bot(ctx):
         "**PlayMoreBlitz bot** - still being built.\n"
         f"`{USAGE['add']}`\n"
         "`!remove <username> [site]` - takes a player off the list (whoever added them, or an admin)\n"
+        "`!results` - this month so far for everyone on the list (refreshed every "
+        f"{REFRESH_INTERVAL_MINUTES} minutes)\n"
         "More commands are coming."
     )
 
@@ -136,6 +169,7 @@ async def add(ctx, username: str, site: str, owner: Optional[discord.User] = Non
         await _reject(ctx, f"{username} is already on the list for {site}", refund_cooldown=True)
         return
     log.info("%s %s on %s for %s (start rating %s)", outcome, username, site, person.id, start)
+    _start_refresh(site, username)
     await ctx.message.add_reaction("✅")
 
 
@@ -165,6 +199,15 @@ async def remove(ctx, username: str, site: Optional[str] = None):
     await asyncio.to_thread(store.remove_player, player.site, player.username)
     log.info("removed %s on %s (by %s)", player.username, player.site, ctx.author.id)
     await ctx.message.add_reaction("✅")
+
+
+@bot.command()
+async def results(ctx):
+    """This month so far, from the stored totals. Makes no calls to the chess sites."""
+    month = sources.current_month()
+    rows = await asyncio.to_thread(store.results, month)
+    for message in render.render_results(rows, month, datetime.now(timezone.utc), GOB_TARGET):
+        await ctx.send(message)
 
 
 @bot.event
