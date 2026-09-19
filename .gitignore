@@ -1,0 +1,15 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Local data
+*.db
+
+# Environment
+venv/
+__pycache__/
+*.pyc
+
+# Test fixtures built from real accounts (opponent usernames) — not for a public repo
+tests/fixtures_private/
