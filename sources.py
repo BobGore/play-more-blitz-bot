@@ -90,6 +90,29 @@ def month_bounds(month):
     return start, end
 
 
+def current_month(now=None):
+    """The "YYYY-MM" UTC month containing `now` (the present moment by default)."""
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(timezone.utc).strftime("%Y-%m")
+
+
+def previous_month(month):
+    """The "YYYY-MM" month before `month`."""
+    start, _ = month_bounds(month)
+    year, mon = (start.year - 1, 12) if start.month == 1 else (start.year, start.month - 1)
+    return f"{year:04d}-{mon:02d}"
+
+
+# Both sites allow letters, digits, "_" and "-". Usernames are put into URLs, so
+# anything else is refused before it can bend a request (a "/" or "?" or "..").
+_USERNAME = re.compile(r"[A-Za-z0-9_-]{2,30}")
+
+
+def check_username(username):
+    if not _USERNAME.fullmatch(username):
+        raise SourceError(f"'{username}' isn't a valid username (letters, numbers, - and _ only)")
+
+
 # --- Chess.com -------------------------------------------------------------
 
 CC_DRAW = {"agreed", "repetition", "stalemate", "insufficient", "50move", "timevsinsufficient"}
@@ -298,7 +321,7 @@ def only_after(games, after):
     return games if after is None else [g for g in games if g.ended_at > after]
 
 
-def lichess_export_params(month, after=None):
+def lichess_export_params(month, after=None, limit=None):
     """Query for a Lichess export of a month, optionally only games after a watermark.
 
     `since` is only a hint about what to transfer, not an exact cut. Probed on
@@ -310,7 +333,7 @@ def lichess_export_params(month, after=None):
     since = int(start.timestamp() * 1000)
     if after is not None:
         since = max(since, int(after.timestamp() * 1000))
-    return {
+    params = {
         "since": since,
         "until": int(end.timestamp() * 1000),
         "perfType": "blitz",
@@ -318,9 +341,12 @@ def lichess_export_params(month, after=None):
         "opening": "true",
         "sort": "dateAsc",
     }
+    if limit is not None:
+        params["max"] = limit
+    return params
 
 
-async def month_games(session, site, username, month, *, after=None):
+async def month_games(session, site, username, month, *, after=None, limit=None):
     """Rated standard blitz games in a "YYYY-MM" UTC month, oldest first. Empty if none.
 
     With `after` (an aware UTC datetime, the end of the last game already counted)
@@ -328,19 +354,24 @@ async def month_games(session, site, username, month, *, after=None):
     recent games, and Chess.com, which only serves a whole month, is fetched whole;
     both are then cut exactly by only_after(). Each game's rating_before is still
     right, because Chess.com's chain is built before the cut.
+
+    With `limit`, only that many of the oldest games are returned. On Lichess that
+    is asked of the site, so a busy month isn't downloaded to read one game.
     """
+    check_username(username)
     start, _ = month_bounds(month)
 
     if site == "chess.com":
         url = f"https://api.chess.com/pub/player/{username.lower()}/games/{start.year}/{start.month:02d}"
         async with _chesscom_lock:
             text = await _get(session, site, url, username, timeout=MONTH_TIMEOUT)
-        return only_after(parse_chesscom_month(_json(site, text), username), after)
+        games = only_after(parse_chesscom_month(_json(site, text), username), after)
+        return games[:limit] if limit is not None else games
 
     if site == "lichess":
         global _lichess_last_export
         url = f"https://lichess.org/api/games/user/{username}"
-        params = lichess_export_params(month, after)
+        params = lichess_export_params(month, after, limit)
         async with _lichess_lock:
             wait = LICHESS_EXPORT_MIN_INTERVAL - (time.monotonic() - _lichess_last_export)
             if wait > 0:
@@ -356,6 +387,7 @@ async def month_games(session, site, username, month, *, after=None):
 
 async def current_rating(session, site, username):
     """The player's current blitz rating. Raises NoSuchUser or NoRating."""
+    check_username(username)
     if site == "chess.com":
         url = f"https://api.chess.com/pub/player/{username.lower()}/stats"
         async with _chesscom_lock:
@@ -378,3 +410,57 @@ async def current_rating(session, site, username):
         return perf["rating"]
 
     raise ValueError(f"unknown site {site!r}")
+
+
+async def account_name(session, site, username):
+    """The account's own spelling of its username ("Alice" for a typed "ALICE").
+
+    Chess.com's profile lowercases its `username` field but ends its `url` in the
+    real spelling; Lichess's `username` field is the real spelling. This is for
+    display only, so if the site's answer doesn't match what was typed (ignoring
+    case) the typed spelling is kept. Raises NoSuchUser for an unknown account.
+    """
+    check_username(username)
+    if site == "chess.com":
+        url = f"https://api.chess.com/pub/player/{username.lower()}"
+        async with _chesscom_lock:
+            text = await _get(session, site, url, username, timeout=REQUEST_TIMEOUT)
+        shown = _json(site, text).get("url", "").rstrip("/").rsplit("/", 1)[-1]
+    elif site == "lichess":
+        url = f"https://lichess.org/api/user/{username}"
+        async with _lichess_lock:
+            text = await _get(session, site, url, username, timeout=REQUEST_TIMEOUT)
+        shown = _json(site, text).get("username", "")
+    else:
+        raise ValueError(f"unknown site {site!r}")
+
+    return shown if shown.lower() == username.lower() else username
+
+
+async def start_rating(session, site, username, month):
+    """The blitz rating the player held at the start of `month`, per the brief.
+
+    Also proves the account exists: an unknown user raises NoSuchUser.
+
+    Chess.com only reports the rating after each game, so it is the rating after
+    the last game of the previous month. With none, it is the current rating: no
+    games at all this month means it hasn't moved, and if they have played this
+    month already the games before registering are missing from the gain, which
+    the brief accepts.
+
+    Lichess reports the rating before each game, so it is the rating before the
+    month's first game (one game is fetched, not the month), or the current
+    rating if there isn't one.
+    """
+    if site == "chess.com":
+        last_month = await month_games(session, site, username, previous_month(month))
+        if last_month:
+            return last_month[-1].rating_after
+    elif site == "lichess":
+        first = await month_games(session, site, username, month, limit=1)
+        if first:
+            return first[0].rating_before
+    else:
+        raise ValueError(f"unknown site {site!r}")
+
+    return await current_rating(session, site, username)
