@@ -145,6 +145,137 @@ def _footer(rows, now):
     return text
 
 
+# --- player summaries: !mystats and !mystatsfull ----------------------------
+
+SITE_NAMES = {"chess.com": "Chess.com", "lichess": "Lichess"}
+
+OPPONENT_LABELS = {"Higher": "Higher (>50 above)", "Similar": "Similar (within 50)", "Lower": "Lower (>50 below)"}
+TIME_OF_DAY_LABELS = {"Night": "Night (21-06)", "Morning": "Morning (06-12)", "Afternoon": "Afternoon (12-17)", "Evening": "Evening (17-21)"}
+
+
+def _pct(score):
+    return "-" if score is None else f"{int(score * 100 + 0.5)}%"
+
+
+def _signed(n):
+    return f"+{n}" if n > 0 else str(n)
+
+
+def _days(n):
+    return f"{n} day" if n == 1 else f"{n} days"
+
+
+def results_block(r):
+    """The three-line results block of a player's month."""
+    return "\n".join(
+        [
+            f"Games {r.games}    W {r.wins}   D {r.draws}   L {r.losses}    Score {_pct(r.score)}",
+            f"Rating  start {r.start_rating}   end {r.end_rating}   net {_signed(r.end_rating - r.start_rating)}"
+            f"   high {r.high}   low {r.low}",
+            f"Days played {r.days_played}   Longest play streak {_days(r.longest_play_streak)}"
+            f"   Best win streak {r.best_win_streak}   Most games in a day {r.most_games_in_day}",
+        ]
+    )
+
+
+def tally_table(rows, header, labels=None):
+    """Rows of stats.Tally as fixed-width text: label, games, W, D, L and score."""
+    labels = labels or {}
+    names = [labels.get(t.label, t.label) for t in rows]
+    width = max(len(header), *map(len, names))
+    # Each number column is as wide as its own biggest value, so small months stay narrow.
+    cols = [max(len(head), *(len(str(getattr(t, field))) for t in rows))
+            for head, field in (("G", "games"), ("W", "wins"), ("D", "draws"), ("L", "losses"))]
+    lines = [f"{header:<{width}}  " + "  ".join(f"{head:>{w}}" for head, w in zip("GWDL", cols)) + "  Score"]
+    for name, t in zip(names, rows):
+        numbers = "  ".join(f"{v:>{w}}" for v, w in zip((t.games, t.wins, t.draws, t.losses), cols))
+        lines.append(f"{name:<{width}}  {numbers}  {_pct(t.score):>5}")
+    return lines
+
+
+def _table_parts(title, lines):
+    """A titled table as one or more messages' worth of parts, the header repeated on each."""
+    header, rows = lines[0], lines[1:]
+    parts, chunk, size = [], [], 0
+    limit = MAX_MESSAGE - len(title) - len(header) - 20
+    for row in rows:
+        if chunk and size + len(row) + 1 > limit:
+            parts.append(f"**{title}**\n```\n{header}\n" + "\n".join(chunk) + "\n```")
+            chunk, size = [], 0
+        chunk.append(row)
+        size += len(row) + 1
+    parts.append(f"**{title}**\n```\n{header}\n" + "\n".join(chunk) + "\n```")
+    return parts
+
+
+def _pack(parts):
+    """Join parts into as few messages as fit, never splitting a part."""
+    messages, current = [], ""
+    for part in parts:
+        if current and len(current) + 1 + len(part) > MAX_MESSAGE:
+            messages.append(current)
+            current = ""
+        current = f"{current}\n{part}" if current else part
+    if current:
+        messages.append(current)
+    return messages
+
+
+def _player_title(username, site, month, full):
+    return f"`{username}` · {SITE_NAMES.get(site, site)} · {month_title(month)} so far" + (" · full" if full else "")
+
+
+def render_mystats(username, site, month, results, openings):
+    """The default summary: the results block, then opening tables as White and Black."""
+    parts = [f"{_player_title(username, site, month, False)}\n```\n{results_block(results)}\n```"]
+    if results.games == 0:
+        parts.append("No rated blitz games yet this month.")
+        return _pack(parts)
+    for colour, title in (("white", "As White"), ("black", "As Black")):
+        rows = openings[colour]
+        if rows:
+            parts += _table_parts(title, tally_table(rows, "Opening"))
+        else:
+            parts.append(f"**{title}**\nNo games.")
+    return _pack(parts)
+
+
+def records_block(rec):
+    def line(label, e, tag=""):
+        return f"{label:<19}" + ("-" if e is None else f"{e.rating}  {e.opponent}{tag}")
+
+    def mate(label, moves):
+        return f"{label:<19}" + ("-" if moves is None else f"{moves} moves")
+
+    return "\n".join(
+        [
+            line("Best win", rec.best_win),
+            line("Worst loss", rec.worst_loss),
+            line("Strongest opponent", rec.strongest_opponent, f" ({rec.strongest_opponent.result})" if rec.strongest_opponent else ""),
+            line("Weakest opponent", rec.weakest_opponent, f" ({rec.weakest_opponent.result})" if rec.weakest_opponent else ""),
+            mate("Quickest mate won", rec.quickest_mate_won),
+            mate("Quickest mate lost", rec.quickest_mate_lost),
+        ]
+    )
+
+
+def render_mystatsfull(username, site, month, results, records, splits):
+    """The full summary: records, then the splits by opponent rating, colour, weekday and time of day."""
+    parts = [f"{_player_title(username, site, month, True)}\n```\n{records_block(records)}\n```"]
+    if results.games == 0:
+        parts.append("No rated blitz games yet this month.")
+        return _pack(parts)
+    for title, rows, header, labels in (
+        ("By opponent rating", splits.by_opponent_rating, "Opponent", OPPONENT_LABELS),
+        ("By colour", splits.by_colour, "Colour", None),
+        ("By weekday", splits.by_weekday, "Day", None),
+        ("By time of day (UTC)", splits.by_time_of_day, "Time", TIME_OF_DAY_LABELS),
+    ):
+        if rows:
+            parts += _table_parts(title, tally_table(rows, header, labels))
+    return _pack(parts)
+
+
 def _split(title, header, rule, lines, footer):
     """Pack the rows into code blocks that fit a message, repeating the header on each."""
     fence_cost = len("```\n") * 2 + len(header) + len(rule) + 2

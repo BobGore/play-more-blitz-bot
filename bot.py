@@ -15,9 +15,11 @@ import discord
 from discord.ext import commands, tasks
 
 import announce
+import gamecache
 import refresh
 import render
 import sources
+import stats
 import store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -56,6 +58,8 @@ USAGE = {
     "remove": "!remove <username> [site]",
     "100gob": "!100gob [username] [site]",
     "100gobnext": "!100gobnext [username] [site]",
+    "mystats": "!mystats [username] [site]",
+    "mystatsfull": "!mystatsfull [username] [site]",
 }
 
 intents = discord.Intents.default()
@@ -174,6 +178,8 @@ async def help_blitz_bot(ctx):
         f"{REFRESH_INTERVAL_MINUTES} minutes)\n"
         f"`!100gob [username]` - join this month's challenge: {GOB_TARGET} games of blitz\n"
         "`!100gobnext [username]` - sign up for next month's challenge\n"
+        "`!mystats [username]` - one player's results and openings this month (yours if no name)\n"
+        "`!mystatsfull [username]` - their records and splits by opponent, colour, day and time\n"
         "More commands are coming."
     )
 
@@ -244,41 +250,61 @@ async def remove(ctx, username: str, site: Optional[str] = None):
     await ctx.message.add_reaction("✅")
 
 
+async def _pick_player(ctx, username, site, command, *, refund_cooldown=False):
+    """Work out which registered account a command means, or say why it can't.
+
+    With no username it is the caller's own account (asking which if they have
+    several). With one it is that registered player, on the given site if the same
+    name is on both. Returns a store.Player, or None after replying with the reason.
+    """
+    if site is not None:
+        site = site.lower()
+        if site not in sources.SITES:
+            await _reject(ctx, "the site must be `chess.com` or `lichess`", refund_cooldown=refund_cooldown)
+            return None
+
+    if username is None:
+        mine = await asyncio.to_thread(store.accounts_of, ctx.author.id)
+        if not mine:
+            await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` first", refund_cooldown=refund_cooldown)
+            return None
+        if len(mine) > 1:
+            names = ", ".join(f"{p.username} ({p.site})" for p in mine)
+            await _reject(
+                ctx,
+                f"you have {len(mine)} accounts: {names} - say which, e.g. `!{command} {mine[0].username} {mine[0].site}`",
+                refund_cooldown=refund_cooldown,
+            )
+            return None
+        return mine[0]
+
+    matches = await asyncio.to_thread(store.find_active, username, site)
+    if not matches:
+        await _reject(ctx, f"'{username}' isn't on the list", refund_cooldown=refund_cooldown)
+        return None
+    if len(matches) > 1:
+        sites = " and ".join(m.site for m in matches)
+        await _reject(
+            ctx,
+            f"{username} is on the list for {sites} - say which, e.g. `!{command} {username} {matches[0].site}`",
+            refund_cooldown=refund_cooldown,
+        )
+        return None
+    return matches[0]
+
+
 async def _join_challenge(ctx, username, site, month, when, command):
     """Shared by !100gob (this month) and !100gobnext (next month).
 
     `when` is how a reply refers to the month ("this month", or its name) and
     `command` is the command's own name, for the examples in replies.
     """
-    if site is not None:
-        site = site.lower()
-        if site not in sources.SITES:
-            await _reject(ctx, "the site must be `chess.com` or `lichess`")
-            return
-
-    if username is None:
-        mine = await asyncio.to_thread(store.accounts_of, ctx.author.id)
-        if not mine:
-            await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` first")
-            return
-        if len(mine) > 1:
-            names = ", ".join(f"{p.username} ({p.site})" for p in mine)
-            await _reject(ctx, f"you have {len(mine)} accounts: {names} - say which, e.g. `!{command} {mine[0].username} {mine[0].site}`")
-            return
-        player = mine[0]
-    else:
-        matches = await asyncio.to_thread(store.find_active, username, site)
-        if not matches:
-            await _reject(ctx, f"'{username}' isn't on the list")
-            return
-        if len(matches) > 1:
-            sites = " and ".join(m.site for m in matches)
-            await _reject(ctx, f"{username} is on the list for {sites} - say which, e.g. `!{command} {username} {matches[0].site}`")
-            return
-        player = matches[0]
-        if not _is_admin(ctx.author.id) and player.added_by != ctx.author.id:
-            await _reject(ctx, f"only whoever added {player.username}, or an admin, can put them in 100GOB")
-            return
+    player = await _pick_player(ctx, username, site, command)
+    if player is None:
+        return
+    if username is not None and not _is_admin(ctx.author.id) and player.added_by != ctx.author.id:
+        await _reject(ctx, f"only whoever added {player.username}, or an admin, can put them in 100GOB")
+        return
 
     outcome = await asyncio.to_thread(store.join_100gob, player.site, player.username, month)
     if outcome == store.ALREADY:
@@ -303,6 +329,54 @@ async def gob_next(ctx, username: Optional[str] = None, site: Optional[str] = No
     """Sign up for next month's 100GOB challenge (next month means the month after the current UTC month)."""
     month = sources.next_month(sources.current_month())
     await _join_challenge(ctx, username, site, month, f"for {render.month_title(month)}", "100gobnext")
+
+
+async def _player_stats(ctx, username, site, command, full):
+    """Shared by !mystats and !mystatsfull: one player's month, from their games.
+
+    Unlike !results this calls the chess sites, though only for games not already
+    held (see gamecache), which is why both commands carry the cooldown.
+    """
+    player = await _pick_player(ctx, username, site, command, refund_cooldown=True)
+    if player is None:
+        return
+
+    month = sources.current_month()
+    row = await asyncio.to_thread(store.month_row, player.site, player.username, month)
+    if row is None:
+        await _reject(ctx, f"{player.username} has no results for {render.month_title(month)} yet - try again shortly", refund_cooldown=True)
+        return
+
+    async with ctx.typing():
+        try:
+            async with aiohttp.ClientSession() as session:
+                games = await gamecache.month_games(session, player.site, player.username, month)
+        except sources.SourceError as exc:
+            await _reject(ctx, str(exc), refund_cooldown=True)
+            return
+
+    start = row["start_rating"]
+    summary = stats.summarise(games, start)
+    if full:
+        messages = render.render_mystatsfull(player.username, player.site, month, summary, stats.records(games), stats.splits(games, start))
+    else:
+        messages = render.render_mystats(player.username, player.site, month, summary, stats.opening_tables(games))
+    for message in messages:
+        await ctx.send(message)
+
+
+@bot.command(name="mystats", aliases=["stats"])
+@commands.dynamic_cooldown(_cooldown_for, commands.BucketType.user)
+async def mystats(ctx, username: Optional[str] = None, site: Optional[str] = None):
+    """Results and openings for one player this month: your own account, or any registered player by name."""
+    await _player_stats(ctx, username, site, "mystats", full=False)
+
+
+@bot.command(name="mystatsfull", aliases=["statsfull"])
+@commands.dynamic_cooldown(_cooldown_for, commands.BucketType.user)
+async def mystatsfull(ctx, username: Optional[str] = None, site: Optional[str] = None):
+    """Records and the splits by opponent rating, colour, weekday and time of day."""
+    await _player_stats(ctx, username, site, "mystatsfull", full=True)
 
 
 @bot.command()

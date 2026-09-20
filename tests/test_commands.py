@@ -611,6 +611,180 @@ def test_a_missing_argument_style_error_gets_the_100gob_usage():
     assert "!100gob [username] [site]" in said(ctx)[0]
 
 
+# --- !mystats and !mystatsfull ---------------------------------------------
+
+
+@pytest.fixture
+def played(monkeypatch):
+    """Fake the game cache: state["games"] is what any player's month contains."""
+    from helpers import at, game
+
+    state = {
+        "calls": [],
+        "error": None,
+        "games": [
+            game("W", when=at(2, 10), rating_after=1510, colour="white", opening="London-System", opponent="rival_a", opponent_rating=1550),
+            game("L", when=at(2, 11), rating_after=1495, colour="white", opening="London-System", opponent="rival_b", opponent_rating=1400),
+            game("D", when=at(3, 22), rating_after=1495, colour="black", opening="Caro-Kann-Defense", opponent="rival_c", opponent_rating=1500),
+        ],
+    }
+
+    async def fake_month_games(session, site_name, username, month):
+        state["calls"].append((site_name, username, month))
+        if state["error"]:
+            raise state["error"]
+        return list(state["games"])
+
+    monkeypatch.setattr(botmod.gamecache, "month_games", fake_month_games)
+    return state
+
+
+def test_mystats_with_no_name_shows_the_callers_own_account(played):
+    registered(ALICE, "Alice")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    text = "\n".join(said(ctx))
+    assert reactions(ctx) == []
+    assert "`Alice` · Chess.com" in text and "Games 3    W 1   D 1   L 1" in text
+    assert "**As White**" in text and "London System" in text
+    assert played["calls"] == [("chess.com", "Alice", sources.current_month())]
+
+
+def test_anyone_can_look_at_any_registered_player_by_name_which_is_the_friend_check(played):
+    registered(ALICE, "Alice")
+    ctx = make_ctx(BOB)  # Bob added nothing, and isn't an admin
+    run(botmod.mystats, ctx, "alice")
+    assert "`Alice`" in "\n".join(said(ctx)) and reactions(ctx) == []
+
+
+def test_mystatsfull_shows_records_and_splits(played):
+    registered(ALICE, "Alice")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystatsfull, ctx)
+    text = "\n".join(said(ctx))
+    assert "· full" in text and "Best win" in text and "1550  rival_a" in text
+    for title in ("By opponent rating", "By colour", "By weekday", "By time of day (UTC)"):
+        assert f"**{title}**" in text
+
+
+def test_the_short_names_are_the_same_commands():
+    assert botmod.bot.get_command("stats") is botmod.mystats
+    assert botmod.bot.get_command("statsfull") is botmod.mystatsfull
+    assert botmod.bot.get_command("MyStats") is botmod.mystats
+    assert botmod.bot.get_command("MYSTATSFULL") is botmod.mystatsfull
+
+
+def test_mystats_with_two_accounts_asks_which_using_its_own_name(played):
+    registered(ALICE, "alice_cc", "chess.com")
+    registered(ALICE, "alice_li", "lichess")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert reactions(ctx) == [NO] and "`!mystats alice_cc chess.com`" in said(ctx)[0]
+    assert played["calls"] == []  # and no site was contacted
+    ctx.command.reset_cooldown.assert_called_once()  # a question isn't a use
+
+
+def test_mystatsfull_asks_with_its_own_command_name_too(played):
+    registered(ALICE, "alice_cc", "chess.com")
+    registered(ALICE, "alice_li", "lichess")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystatsfull, ctx)
+    assert "`!mystatsfull alice_cc chess.com`" in said(ctx)[0]
+
+
+def test_a_site_settles_a_name_on_both_sites(played):
+    registered(ALICE, "alice", "chess.com")
+    registered(ALICE, "alice", "lichess")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "alice")
+    assert reactions(ctx) == [NO] and "chess.com and lichess" in said(ctx)[0]
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "alice", "LICHESS")
+    assert played["calls"] == [("lichess", "alice", sources.current_month())]
+    assert "Lichess" in "\n".join(said(ctx))
+
+
+def test_mystats_with_no_account_or_an_unknown_name_says_so(played):
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert reactions(ctx) == [NO] and "!add" in said(ctx)[0]
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "nobody")
+    assert reactions(ctx) == [NO] and "isn't on the list" in said(ctx)[0]
+    assert played["calls"] == []
+
+
+def test_a_removed_player_cannot_be_looked_up(played):
+    registered(ALICE, "Alice")
+    store.remove_player("chess.com", "Alice")
+    ctx = make_ctx(BOB)
+    run(botmod.mystats, ctx, "alice")
+    assert reactions(ctx) == [NO]
+
+
+def test_mystats_rejects_an_unknown_site(played):
+    registered(ALICE, "Alice")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "alice", "example.org")
+    assert reactions(ctx) == [NO] and "chess.com" in said(ctx)[0]
+    assert played["calls"] == []
+
+
+def test_a_site_failure_is_reported_and_does_not_burn_the_cooldown(played):
+    registered(ALICE, "Alice")
+    played["error"] = sources.SourceError("couldn't reach chess.com (TimeoutError)")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert reactions(ctx) == [NO] and said(ctx) == ["couldn't reach chess.com (TimeoutError)"]
+    ctx.command.reset_cooldown.assert_called_once()
+
+
+def test_a_player_with_no_row_for_the_month_is_told_to_try_later(played):
+    registered(ALICE, "Alice", month="2020-01")  # only an old row, as at the start of a new month
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert reactions(ctx) == [NO] and "no results for" in said(ctx)[0]
+    assert played["calls"] == []
+
+
+def test_a_player_with_no_games_yet_gets_a_friendly_message(played):
+    registered(ALICE, "Alice")
+    played["games"] = []
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert said(ctx)[0].endswith("No rated blitz games yet this month.")
+
+
+def test_the_start_rating_comes_from_the_stored_month_row(played):
+    registered(ALICE, "Alice")  # start rating 1500 in the row
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert "start 1500" in "\n".join(said(ctx))
+
+
+def test_an_admin_asking_for_a_missing_player_has_no_cooldown_to_refund(played):
+    ctx = make_ctx(MATT_ADMIN)
+    run(botmod.mystats, ctx, "nobody")
+    assert reactions(ctx) == [NO]
+    ctx.command.reset_cooldown.assert_not_called()
+
+
+def test_both_commands_carry_the_cooldown_and_the_error_handler_knows_their_usage():
+    for command in (botmod.mystats, botmod.mystatsfull):
+        assert command._buckets.valid  # a cooldown is attached
+    assert botmod.USAGE["mystats"] == "!mystats [username] [site]"
+    assert botmod.USAGE["mystatsfull"] == "!mystatsfull [username] [site]"
+
+
+def test_the_help_message_lists_every_command_and_fits_in_one_discord_message():
+    ctx = make_ctx(ALICE)
+    run(botmod.help_blitz_bot, ctx)
+    text = said(ctx)[0]
+    for name in ("!add", "!remove", "!results", "!100gob", "!100gobnext", "!mystats", "!mystatsfull"):
+        assert name in text
+    assert len(text) < 2000
+
+
 # --- !results --------------------------------------------------------------
 
 
