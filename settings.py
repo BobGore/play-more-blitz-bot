@@ -38,6 +38,19 @@ def seconds(name, default, minimum=0.1, env=os.environ):
     return _number(name, default, float, minimum, f"a number of seconds, {minimum} or more", env)
 
 
+def flag(name, default, env=os.environ):
+    """A yes/no setting: 1, true, yes or on; 0, false, no or off, in any capitals."""
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return default
+    word = raw.strip().lower()
+    if word in ("1", "true", "yes", "on"):
+        return True
+    if word in ("0", "false", "no", "off"):
+        return False
+    _fail(name, raw, "yes or no (1, true, yes, on, 0, false, no or off)")
+
+
 def discord_ids(name, default, env=os.environ):
     raw = env.get(name)
     if raw is None or not raw.strip():
@@ -80,6 +93,10 @@ if POST_HOUR_UK > 23:
 CALL_DAYS_BEFORE = whole_number("CALL_DAYS_BEFORE", 7)  # the sign-up call goes out this many days before the month
 
 # --- Game analysis (the queue the EliteDesk worker draws from) ------------------------------------------
+
+# Whether the bot puts members' games in the analysis queue. Off until the analysis worker is set up: with it off
+# nothing about a game is kept beyond the running totals, as before.
+ANALYSIS_ENABLED = flag("ANALYSIS_ENABLED", False)
 
 # Per player per UTC month, counting their games in the order played: up to the first number they are analysed
 # as usual; from there up to the second they go to the back of the queue (analysed when nothing else is
@@ -127,5 +144,5 @@ NAMES = (
     "MIN_OPENING_GAMES", "MIN_BEST_WORST_GAMES", "SIMILAR_RATING_BAND", "STATS_CACHE_PLAYERS",
     "REQUEST_TIMEOUT_SECONDS", "MONTH_TIMEOUT_SECONDS", "MONTH_STALL_SECONDS", "LICHESS_EXPORT_MIN_INTERVAL",
     "PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT", "BACKUP_DIR", "BACKUP_KEEP_DAYS",
-    "ANALYSIS_FULL_PRIORITY_GAMES", "ANALYSIS_MAX_GAMES", "ANALYSIS_CLAIM_MINUTES", "ANALYSIS_MAX_ATTEMPTS",
+    "ANALYSIS_ENABLED", "ANALYSIS_FULL_PRIORITY_GAMES", "ANALYSIS_MAX_GAMES", "ANALYSIS_CLAIM_MINUTES", "ANALYSIS_MAX_ATTEMPTS",
 )

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 
+import analysis_feed
 import sources
 import store
 
@@ -71,6 +72,7 @@ async def refresh_player(session, player, month, *, now=None):
         )
         if not applied:
             return SKIPPED
+        await analysis_feed.feed(player.site, player.username, games, now)  # after the totals: it can never spoil them
         return UPDATED if games else UNCHANGED
 
 

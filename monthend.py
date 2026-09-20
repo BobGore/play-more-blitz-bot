@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 
+import analysis_feed
 import sources
 import store
 
@@ -61,12 +62,14 @@ async def close_month(session, month, *, now=None):
     now = now or datetime.now(timezone.utc)
     players = await asyncio.to_thread(store.open_players, month)
     finals, failures = [], []
+    fetched = []  # (player, games), queued for analysis once the month has been closed
 
     for player in players:
         try:
             row = await asyncio.to_thread(store.month_row, player.site, player.username, month)
             games = await sources.month_games(session, player.site, player.username, month)
             finals.append(_finals(player, row, games))
+            fetched.append((player, games))
         except sources.SourceError as exc:
             failures.append(Failure(player.site, player.username, str(exc)))
             log.warning("can't close %s: %s on %s: %s", month, player.username, player.site, exc)
@@ -81,6 +84,8 @@ async def close_month(session, month, *, now=None):
     closed = await asyncio.to_thread(store.close_month, month, sources.next_month(month), finals, now.isoformat())
     last_failures.pop(month, None)
     log.info("closed %s for %d players", month, closed)
+    for player, games in fetched:  # every game of the month is offered again, so any the refresher missed get queued
+        await analysis_feed.feed(player.site, player.username, games, now)
     return CloseResult(month, True, closed, ())
 
 

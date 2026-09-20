@@ -101,6 +101,7 @@ setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at s
 | `DB_LOCK_TIMEOUT` | Seconds to wait for another database write to finish. | 5 |
 | `BACKUP_DIR` | Folder for the nightly database backups. It must already exist, and should be on a different disk from the database. | `backups` beside the code |
 | `BACKUP_KEEP_DAYS` | Days of nightly backups to keep. | 100 |
+| `ANALYSIS_ENABLED` | Whether members' games are put in the analysis queue (yes or no). Leave it off until the analysis worker is set up. | no |
 | `ANALYSIS_FULL_PRIORITY_GAMES` | A player's games in a month up to this number are analysed as usual. | 500 |
 | `ANALYSIS_MAX_GAMES` | Games from there up to this number go to the back of the analysis queue; beyond it they are not analysed. | 1000 |
 | `ANALYSIS_CLAIM_MINUTES` | How long the analysis worker has to finish a game before it goes back in the queue. | 30 |
@@ -152,6 +153,33 @@ journalctl -u playmoreblitz-backup                 # what it did, or why it fail
 
 To restore, stop the bot, copy the chosen backup over the database file, and start the bot again.
 
+### Game analysis (optional)
+
+The bot can have a chess engine analyse the games its players play and keep the figures: accuracy overall and by
+phase, inaccuracies, mistakes, blunders and average centipawn loss, for both sides. The engine runs on another
+machine, the **worker**, which asks the bot's machine for games over SSH. The worker fetches each game from its
+site, analyses it in memory and sends back only the figures; the moves are never stored or sent.
+
+1. **Switch it on** in the bot's `.env`: `ANALYSIS_ENABLED=yes`, and restart the bot. From then on the refresher
+   queues each registered player's games (see the settings table for the monthly limits).
+2. **Give the worker its own SSH key.** On the worker machine: `ssh-keygen -t ed25519 -f ~/.ssh/pmb_worker -N ""`.
+   On the bot's machine add one line to `~/.ssh/authorized_keys`, which locks that key to the gateway program so it
+   can do nothing else (`desk` is the worker's name):
+
+   ```
+   command="/path/to/venv/bin/python /path/to/worker_gateway.py desk",restrict ssh-ed25519 AAAA... pmb-worker
+   ```
+3. **Set up the worker.** It needs Python 3.13, `pip install -r requirements-worker.txt`, a Stockfish binary, and these
+   files in one folder: `worker.py`, `worker_gateway.py`, `analysis.py`, `divider.py`, `game_data.py`. Copy
+   `worker.env.example` to `worker.env` there and fill it in (it is git-ignored).
+4. **Try it.** `python worker.py --check` tests the connection and the engine and stops. `python worker.py --once`
+   analyses everything in the queue and stops. `python worker.py` keeps running and looks for new games every
+   `IDLE_SLEEP_SECONDS`.
+
+The worker only ever asks the bot for games, so it works whenever the two machines can reach each other; if the
+worker is off, games simply wait in the queue. On Windows the worker passes its input and output to `ssh` through
+temporary files, because Windows' `ssh.exe` stops responding when another program gives it a pipe.
+
 ### If commands seem to do nothing
 
 The log says what the bot did with every command. Look for:
@@ -169,6 +197,13 @@ the player's totals: games, wins, draws, losses, start and end rating, and wheth
 details for `!mystats` are held in memory only and are gone when the bot restarts. Everything comes from public
 data on Chess.com and Lichess. `!remove` takes a player off the list; asking an admin to delete their rows from
 the database removes the history too.
+
+If game analysis is switched on (`ANALYSIS_ENABLED`) the bot also keeps a row for every game a registered player
+plays: the site and its id for the game, when it ended, the time control, the result and how it ended, both players'
+usernames (the opponent's is in the public game record too), the registered player's rating change, the ratings the site
+reports, and the site's own opening name and ECO code. Once a game has been analysed the row also holds the engine's
+figures for both sides (accuracy overall and by phase, inaccuracies, mistakes, blunders, average centipawn loss) and a
+packed list of the evaluation after each move. The moves themselves are never stored.
 
 ## Development
 
@@ -189,7 +224,9 @@ brings it in.
 | `analysis.py` | The game-analysis maths: accuracy, inaccuracies, mistakes, blunders, average loss (Lichess's published method) |
 | `divider.py` | Where a game's opening, middlegame and endgame start (a translation of the scalachess divider, MIT) |
 | `analysis_queue.py` | The queue of games waiting to be analysed and the results that come back (claiming, limits, giving games back) |
+| `analysis_feed.py`, `game_records.py` | Putting the games the bot already fetches into the analysis queue (off unless `ANALYSIS_ENABLED`) |
 | `worker_gateway.py` | The one program the analysis worker's SSH key may run: `hello`, `claim N`, `submit`, `release`, JSON in and out |
+| `worker.py`, `game_data.py` | The analysis worker (runs on the machine with the engine) and its reading of the two sites' games |
 | `settings.py` | Every setting, its default, and how `.env` overrides it |
 | `sources.py` | Chess.com and Lichess lookups |
 | `stats.py`, `openings.py` | The numbers and opening grouping, as pure functions |

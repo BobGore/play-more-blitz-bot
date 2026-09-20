@@ -40,6 +40,30 @@ def test_seconds_accept_decimals_and_refuse_nonsense():
             settings.seconds("X", 2.0, env={"X": bad})
 
 
+@pytest.mark.parametrize("word, expected", [("1", True), ("true", True), ("YES", True), (" On ", True),
+                                            ("0", False), ("False", False), ("no", False), ("OFF", False)])
+def test_yes_no_settings_understand_the_usual_words(word, expected):
+    assert settings.flag("X", not expected, env={"X": word}) is expected
+
+
+def test_a_yes_no_setting_falls_back_to_its_default_and_refuses_anything_else():
+    assert settings.flag("X", True, env={}) is True and settings.flag("X", False, env={"X": ""}) is False
+    for bad in ("maybe", "2", "y", "enabled"):
+        with pytest.raises(SystemExit) as stopped:
+            settings.flag("ANALYSIS_ENABLED", False, env={"ANALYSIS_ENABLED": bad})
+        assert "ANALYSIS_ENABLED" in str(stopped.value)
+
+
+def test_analysis_is_off_unless_switched_on():
+    assert _run("import settings; print(settings.ANALYSIS_ENABLED)").stdout.strip() == "False"
+    assert _run("import settings; print(settings.ANALYSIS_ENABLED)", ANALYSIS_ENABLED="yes").stdout.strip() == "True"
+
+
+def test_the_two_analysis_limits_must_be_in_order():
+    out = _run("import settings", ANALYSIS_FULL_PRIORITY_GAMES="600", ANALYSIS_MAX_GAMES="500")
+    assert out.returncode != 0 and "ANALYSIS_FULL_PRIORITY_GAMES" in out.stderr and "ANALYSIS_MAX_GAMES" in out.stderr
+
+
 def test_discord_ids_are_comma_separated_and_never_empty():
     assert settings.discord_ids("X", {1}, env={}) == {1}
     assert settings.discord_ids("X", {1}, env={"X": "5, 6,7"}) == {5, 6, 7}
@@ -93,5 +117,5 @@ def test_every_setting_is_in_the_readme_and_the_env_example(name):
 
 def test_the_list_of_names_matches_what_settings_py_actually_reads():
     source = (ROOT / "settings.py").read_text(encoding="utf-8")
-    read = set(re.findall(r'(?:whole_number|seconds|discord_ids)\(\s*"([A-Z_]+)"', source)) | {"PLAYMOREBLITZ_DB", "BACKUP_DIR"}
+    read = set(re.findall(r'(?:whole_number|seconds|discord_ids|flag)\(\s*"([A-Z_]+)"', source)) | {"PLAYMOREBLITZ_DB", "BACKUP_DIR"}
     assert read == set(settings.NAMES)

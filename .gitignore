@@ -17,3 +17,4 @@ __pycache__/
 
 # Test fixtures built from real accounts (opponent usernames) — not for a public repo
 tests/fixtures_private/
+worker.env
