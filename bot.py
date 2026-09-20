@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
@@ -19,12 +20,23 @@ import gamecache
 import monthend
 import refresh
 import render
+import singleton
 import sources
 import stats
 import store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("playmoreblitz")
+
+
+class _NoVoiceWarnings(logging.Filter):
+    """discord.py warns twice at startup that voice isn't supported. This bot never uses voice."""
+
+    def filter(self, record):
+        return "voice will NOT be supported" not in record.getMessage()
+
+
+logging.getLogger("discord.client").addFilter(_NoVoiceWarnings())
 
 # Every command only works in one of these channels. A channel ID only ever
 # belongs to one server, so this also keeps the bot inert everywhere else it
@@ -189,11 +201,26 @@ def _start_refresh(site, username):
     task.add_done_callback(_background.discard)
 
 
+def configuration_warnings():
+    """Things about the setup that the person running the bot should hear about at startup."""
+    problems = []
+    if not sources.CONTACT:
+        problems.append("CONTACT is not set: site requests carry no contact address (see .env.example)")
+    if POST_CHANNEL_ID not in ALLOWED_CHANNEL_IDS:
+        problems.append(f"POST_CHANNEL_ID {POST_CHANNEL_ID} is not in ALLOWED_CHANNEL_IDS, so nobody can run commands where the bot posts")
+    if bot.get_channel(POST_CHANNEL_ID) is None:
+        problems.append(
+            f"can't see the post channel {POST_CHANNEL_ID}: is the bot in that server, with View Channel and Send Messages there? "
+            "Scheduled posts will fail until it is"
+        )
+    return problems
+
+
 @bot.event
 async def on_ready():
     log.info("connected as %s", bot.user)
-    if not sources.CONTACT:
-        log.warning("CONTACT is not set: site requests carry no contact address (see .env.example)")
+    for problem in configuration_warnings():
+        log.warning(problem)
     if not refresh_loop.is_running():  # on_ready can fire again after a reconnect
         refresh_loop.start()
     if not daily_posts.is_running():
@@ -220,10 +247,29 @@ def _cooldown_for(ctx):
     return commands.Cooldown(1, COOLDOWN_SECONDS)
 
 
+async def _react(ctx, emoji, fallback=None):
+    """Add a reaction to the command message. If the bot isn't allowed to (a missing
+    permission in some channel), say `fallback` in words instead, so the outcome is still
+    clear and a command that succeeded doesn't turn into an error afterwards."""
+    try:
+        await ctx.message.add_reaction(emoji)
+    except discord.HTTPException as exc:
+        log.warning("couldn't add a reaction in channel %s (%s) - does the bot have Add Reactions?", ctx.channel.id, exc.status)
+        if fallback:
+            await ctx.send(fallback)
+
+
+async def _tick(ctx):
+    await _react(ctx, "✅", "Done.")
+
+
 async def _reject(ctx, reason, *, refund_cooldown=False):
     """A red cross and a short reason. A refused command doesn't burn the cooldown."""
-    await ctx.message.add_reaction("❌")
-    await ctx.send(reason)
+    await _react(ctx, "❌")  # the reason below carries the message even if the cross can't be added
+    try:
+        await ctx.send(reason)
+    except discord.HTTPException as exc:
+        log.warning("couldn't send a reply in channel %s (%s): %s", ctx.channel.id, exc.status, reason[:80])
     # Admins have no cooldown bucket at all (see _cooldown_for), so there is
     # nothing to refund and reset_cooldown would fail on the missing bucket.
     if refund_cooldown and not _is_admin(ctx.author.id):
@@ -281,7 +327,7 @@ async def add(ctx, username: str, site: str, owner: Optional[discord.User] = Non
         return
     log.info("%s %s on %s for %s (start rating %s)", outcome, username, site, person.id, start)
     _start_refresh(site, username)
-    await ctx.message.add_reaction("✅")
+    await _tick(ctx)
 
 
 @bot.command()
@@ -295,7 +341,7 @@ async def remove(ctx, username: str, site: Optional[str] = None):
 
     matches = await asyncio.to_thread(store.find_active, username, site)
     if not matches:
-        await _reject(ctx, f"'{username}' isn't on the list")
+        await _reject(ctx, f"'{sources.shorten(username)}' isn't on the list")
         return
     if len(matches) > 1:
         sites = " and ".join(m.site for m in matches)
@@ -309,7 +355,7 @@ async def remove(ctx, username: str, site: Optional[str] = None):
 
     await asyncio.to_thread(store.remove_player, player.site, player.username)
     log.info("removed %s on %s (by %s)", player.username, player.site, ctx.author.id)
-    await ctx.message.add_reaction("✅")
+    await _tick(ctx)
 
 
 async def _pick_player(ctx, username, site, command, *, refund_cooldown=False):
@@ -342,7 +388,7 @@ async def _pick_player(ctx, username, site, command, *, refund_cooldown=False):
 
     matches = await asyncio.to_thread(store.find_active, username, site)
     if not matches:
-        await _reject(ctx, f"'{username}' isn't on the list", refund_cooldown=refund_cooldown)
+        await _reject(ctx, f"'{sources.shorten(username)}' isn't on the list", refund_cooldown=refund_cooldown)
         return None
     if len(matches) > 1:
         sites = " and ".join(m.site for m in matches)
@@ -376,7 +422,7 @@ async def _join_challenge(ctx, username, site, month, when, command):
         await _reject(ctx, f"{render.month_title(month)} is already closed for {player.username}")
         return
     log.info("100GOB: %s on %s in for %s (by %s)", player.username, player.site, month, ctx.author.id)
-    await ctx.message.add_reaction("✅")
+    await _tick(ctx)
 
 
 @bot.command(name="100gob")
@@ -481,7 +527,10 @@ async def closemonth(ctx):
             await _reject(ctx, f"{render.month_title(result.month)} is closed but I couldn't post it - check the logs")
             return
     log.info("!closemonth by %s: %s", ctx.author.id, [(r.month, r.ok) for r in results_])
-    await ctx.message.add_reaction("✅" if everything_ok else "❌")
+    if everything_ok:
+        await _tick(ctx)
+    else:
+        await _react(ctx, "❌")  # the failure notice has already been posted
 
 
 @bot.command()
@@ -520,4 +569,7 @@ if __name__ == "__main__":
     token = os.environ.get("DISCORD_TOKEN")
     if not token:
         raise SystemExit("DISCORD_TOKEN is not set")
-    bot.run(token)
+    # Held for as long as the bot runs: a second copy from this folder refuses to start.
+    _instance_lock = singleton.acquire(Path(__file__).with_name("playmoreblitz.lock"))
+    # log_handler=None: our own logging setup above is used, so each line appears once.
+    bot.run(token, log_handler=None)

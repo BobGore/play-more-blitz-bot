@@ -1,0 +1,18 @@
+[Unit]
+Description=PlayMoreBlitz Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=CHANGEME
+WorkingDirectory=/home/CHANGEME/playmoreblitz
+EnvironmentFile=/home/CHANGEME/playmoreblitz/.env
+ExecStart=/home/CHANGEME/playmoreblitz/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -114,9 +114,15 @@ def previous_month(month):
 _USERNAME = re.compile(r"[A-Za-z0-9_-]{2,30}")
 
 
+def shorten(text, limit=40):
+    """Text a user typed, cut down for echoing back, so a huge argument can't push a reply
+    over Discord's message limit (or turn a short reply into a wall of text)."""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def check_username(username):
     if not _USERNAME.fullmatch(username):
-        raise SourceError(f"'{username}' isn't a valid username (letters, numbers, - and _ only)")
+        raise SourceError(f"'{shorten(username)}' isn't a valid username (letters, numbers, - and _ only)")
 
 
 # --- Chess.com -------------------------------------------------------------

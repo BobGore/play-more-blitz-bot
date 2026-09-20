@@ -6,6 +6,9 @@
 # Local data
 *.db
 *.db.*
+*.db-wal
+*.db-shm
+playmoreblitz.lock
 
 # Environment
 venv/

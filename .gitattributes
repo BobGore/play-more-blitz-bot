@@ -1,0 +1,5 @@
+# Store text as LF whatever the machine it was edited on; the bot is deployed to Linux.
+* text=auto
+*.service text eol=lf
+*.md text eol=lf
+*.py text eol=lf
