@@ -6,6 +6,8 @@ columns up in Discord, split so no message goes over the length limit.
 
 from datetime import datetime, timedelta, timezone
 
+import settings
+
 MAX_MESSAGE = 1900  # Discord's limit is 2000; leave room for the code fences.
 MAX_NAME = 20  # longer names are cut with an ellipsis so one long name can't widen every row
 SITE_CODES = {"chess.com": "CC", "lichess": "LI"}
@@ -153,7 +155,8 @@ def _footer(rows, now, final=False):
 
 SITE_NAMES = {"chess.com": "Chess.com", "lichess": "Lichess"}
 
-OPPONENT_LABELS = {"Higher": "Higher (>50 above)", "Similar": "Similar (within 50)", "Lower": "Lower (>50 below)"}
+BAND = settings.SIMILAR_RATING_BAND
+OPPONENT_LABELS = {"Higher": f"Higher (>{BAND} above)", "Similar": f"Similar (within {BAND})", "Lower": f"Lower (>{BAND} below)"}
 TIME_OF_DAY_LABELS = {"Night": "Night (21-06)", "Morning": "Morning (06-12)", "Afternoon": "Afternoon (12-17)", "Evening": "Evening (17-21)"}
 
 

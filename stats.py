@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from datetime import date, timedelta, timezone
 
 import openings
+import settings
 
-MIN_OPENING_GAMES = 2  # fewer than this and an opening goes into "All others"
+MIN_OPENING_GAMES = settings.MIN_OPENING_GAMES  # fewer than this and an opening goes into "All others"
 OTHERS = "All others"
-BAND = 50  # rating points either side that still count as a similar opponent
+BAND = settings.SIMILAR_RATING_BAND  # rating points either side that still count as a similar opponent
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -142,7 +143,7 @@ def opening_tables(games, min_games=MIN_OPENING_GAMES):
     return tables
 
 
-MIN_BEST_WORST_GAMES = 3  # an opening needs this many games before it can be called best or worst
+MIN_BEST_WORST_GAMES = settings.MIN_BEST_WORST_GAMES  # an opening needs this many games before it can be called best or worst
 
 
 @dataclass(frozen=True)

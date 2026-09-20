@@ -4,16 +4,15 @@ Every function is synchronous and short; call them through asyncio.to_thread fro
 the bot. A player is identified by (site, username), username case-insensitively.
 """
 
-import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 
-# Where the database lives. By default beside the code; set PLAYMOREBLITZ_DB (in .env) to put it
-# elsewhere, for instance in a folder on a larger disk.
-DB_PATH = Path(os.environ.get("PLAYMOREBLITZ_DB") or Path(__file__).with_name("playmoreblitz.db"))
-DB_LOCK_TIMEOUT = 5.0  # seconds to retry if another thread is mid-write, before giving up
+import settings
+
+# Where the database lives (settings.py: beside the code unless PLAYMOREBLITZ_DB in .env says otherwise).
+DB_PATH = settings.DB_PATH
+DB_LOCK_TIMEOUT = settings.DB_LOCK_TIMEOUT  # seconds to retry if another thread is mid-write, before giving up
 
 ADDED = "added"
 REACTIVATED = "reactivated"

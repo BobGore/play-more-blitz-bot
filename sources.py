@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 
 import aiohttp
 
+import settings
+
 SITES = ("chess.com", "lichess")
 
 # Both sites ask for a contact address in the User-Agent so they can reach the
@@ -29,15 +31,15 @@ SITES = ("chess.com", "lichess")
 CONTACT = os.environ.get("CONTACT", "").strip()
 USER_AGENT = "PlayMoreBlitz-Bot/1.0" + (f" (contact: {CONTACT})" if CONTACT else "")
 
-REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT_SECONDS)
 # Lichess streams a game export at about 11-12 games a second, so a busy month
 # (375 games took 33s) can't have a short flat limit. A generous overall cap
 # plus a short limit on the stream stalling keeps a healthy month working
 # while a stuck connection still fails quickly.
-MONTH_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_read=30)
+MONTH_TIMEOUT = aiohttp.ClientTimeout(total=settings.MONTH_TIMEOUT_SECONDS, sock_read=settings.MONTH_STALL_SECONDS)
 
 # Lichess throttles its game export harder than the rest of its API.
-LICHESS_EXPORT_MIN_INTERVAL = 2.0  # seconds between the end of one export and the next
+LICHESS_EXPORT_MIN_INTERVAL = settings.LICHESS_EXPORT_MIN_INTERVAL  # seconds between the end of one export and the next
 _lichess_lock = asyncio.Lock()
 _lichess_last_export = 0.0
 _chesscom_lock = asyncio.Lock()

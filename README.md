@@ -65,7 +65,7 @@ You need Python 3.13 or newer.
 
 ### 2. Configure
 
-Copy `.env.example` to `.env` and fill it in. It is ignored by git and must stay private:
+Copy `.env.example` to `.env` and fill it in. It is ignored by git and must stay private. The two private values:
 
 - `DISCORD_TOKEN`: the bot's token.
 - `CONTACT`: an address or URL that Chess.com and Lichess can use to reach you if the bot misbehaves. It is sent
@@ -76,16 +76,29 @@ Copy `.env.example` to `.env` and fill it in. It is ignored by git and must stay
   new empty database in the wrong place. On a systemd machine add `RequiresMountsFor=/path/to/that/disk` to the
   service so it waits for the disk.
 
-The other settings are constants at the top of `bot.py`:
+Every other setting has a default in `settings.py` and can be changed by adding a line with the same name to
+`.env` and restarting the bot, for instance `COOLDOWN_SECONDS=300` or `ALLOWED_CHANNEL_IDS=123456,789012`. A
+setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at startup and names the setting.
 
-| Constant | Meaning |
-| --- | --- |
-| `ALLOWED_CHANNEL_IDS` | The only channels where commands work. Also keeps the bot silent on other servers and in DMs. |
-| `POST_CHANNEL_ID` | Where the bot's own posts go (final tables, the sign-up call). Should be one of the allowed channels. |
-| `ADMIN_USER_IDS` | Who can remove anyone's entry, add for others, and run `!closemonth`. |
-| `GOB_TARGET` | Games needed for the challenge (100). |
-| `REFRESH_INTERVAL_MINUTES` | How often totals refresh (30). |
-| `COOLDOWN_SECONDS` | Per-user cooldown on the commands that call the sites (600). Admins are exempt. |
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `ALLOWED_CHANNEL_IDS` | The only channels where commands work, comma separated. Also keeps the bot silent on other servers and in DMs. | the test channel |
+| `POST_CHANNEL_ID` | Where the bot's own posts go (final tables, the sign-up call). Should be one of the allowed channels. | the test channel |
+| `ADMIN_USER_IDS` | Who can remove anyone's entry, add for others, and run `!closemonth`, comma separated. | Bob and Matt |
+| `GOB_TARGET` | Games needed for the challenge. | 100 |
+| `REFRESH_INTERVAL_MINUTES` | How often totals refresh. | 30 |
+| `COOLDOWN_SECONDS` | Per-user cooldown on the commands that call the sites. Admins are exempt. | 600 |
+| `POST_HOUR_UK` | The hour (0-23, UK time) at which scheduled posts go out. | 9 |
+| `CALL_DAYS_BEFORE` | Days before a month starts that the sign-up call goes out. | 7 |
+| `MIN_OPENING_GAMES` | Games an opening needs to get its own row rather than "All others". | 2 |
+| `MIN_BEST_WORST_GAMES` | Games an opening needs before it can be called best or worst. | 3 |
+| `SIMILAR_RATING_BAND` | Rating points either side of yours that count as a similar opponent. | 50 |
+| `STATS_CACHE_PLAYERS` | Players whose games are kept in memory for `!mystats`. | 64 |
+| `REQUEST_TIMEOUT_SECONDS` | Longest an ordinary Chess.com or Lichess request may take. | 10 |
+| `MONTH_TIMEOUT_SECONDS` | Longest a whole month's fetch may take. | 300 |
+| `MONTH_STALL_SECONDS` | A fetch that goes quiet for this long is abandoned. | 30 |
+| `LICHESS_EXPORT_MIN_INTERVAL` | Seconds between two Lichess game exports. | 2 |
+| `DB_LOCK_TIMEOUT` | Seconds to wait for another database write to finish. | 5 |
 
 At startup the bot logs a warning for anything it can see is wrong, such as a missing `CONTACT` or a post channel
 it can't reach.
@@ -148,7 +161,8 @@ The tests need no network and no Discord. A few known-answer tests read real gam
 
 | File | Purpose |
 | --- | --- |
-| `bot.py` | Commands, the scheduled tasks, settings |
+| `bot.py` | Commands and the scheduled tasks |
+| `settings.py` | Every setting, its default, and how `.env` overrides it |
 | `sources.py` | Chess.com and Lichess lookups |
 | `stats.py`, `openings.py` | The numbers and opening grouping, as pure functions |
 | `render.py` | Tables and messages |

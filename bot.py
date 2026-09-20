@@ -20,6 +20,7 @@ import gamecache
 import monthend
 import refresh
 import render
+import settings
 import singleton
 import sources
 import stats
@@ -38,33 +39,14 @@ class _NoVoiceWarnings(logging.Filter):
 
 logging.getLogger("discord.client").addFilter(_NoVoiceWarnings())
 
-# Every command only works in one of these channels. A channel ID only ever
-# belongs to one server, so this also keeps the bot inert everywhere else it
-# might get invited to, and in DMs - no separate guild check needed.
-ALLOWED_CHANNEL_IDS = {
-    1550558058793533471,  # test
-}
-
-# Can !remove any entry, add for others and run !closemonth, and are exempt
-# from the cooldown (so testing isn't rate-limited).
-ADMIN_USER_IDS = {
-    810486671174795274,  # Bob
-    315229727629508609,  # Matt
-}
-
-# Commands that call the chess sites are limited to one use per user per this
-# many seconds, so nobody can hammer the sites through the bot.
-COOLDOWN_SECONDS = 600
-
-# How often the background refresher brings every player's totals up to date.
-REFRESH_INTERVAL_MINUTES = 30
-
-# The 100GOB challenge: games in the month that earn the tick.
-GOB_TARGET = 100
-
-# Where the bot's own scheduled posts go (the 100GOB sign-up call now, the month-end
-# table later). The test channel for now.
-POST_CHANNEL_ID = 1550558058793533471
+# The settings live in settings.py (each can be overridden in .env); these names are kept
+# here because the rest of this file and the tests read them from this module.
+ALLOWED_CHANNEL_IDS = settings.ALLOWED_CHANNEL_IDS  # the only channels commands work in
+ADMIN_USER_IDS = settings.ADMIN_USER_IDS  # can remove anyone's entry, add for others, run !closemonth
+COOLDOWN_SECONDS = settings.COOLDOWN_SECONDS  # per user, on commands that call the chess sites
+REFRESH_INTERVAL_MINUTES = settings.REFRESH_INTERVAL_MINUTES  # how often totals are refreshed
+GOB_TARGET = settings.GOB_TARGET  # the 100GOB challenge: games in the month that earn the tick
+POST_CHANNEL_ID = settings.POST_CHANNEL_ID  # where the bot's own scheduled posts go
 
 USAGE = {
     "add": "!add <username> <site>   (site is chess.com or lichess)",

@@ -4,10 +4,11 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import render
+import settings
 
 UK = ZoneInfo("Europe/London")
-POST_TIME = time(hour=9, tzinfo=UK)  # the bot's scheduled posts go out at 9am UK time
-CALL_DAYS_BEFORE = 7  # the call goes out this many days before the month starts
+POST_TIME = time(hour=settings.POST_HOUR_UK, tzinfo=UK)  # the bot's scheduled posts go out at this time, UK
+CALL_DAYS_BEFORE = settings.CALL_DAYS_BEFORE  # the call goes out this many days before the month starts
 
 
 def first_of_next_month(today):

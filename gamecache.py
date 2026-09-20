@@ -9,9 +9,10 @@ number of players held is bounded, and a restart simply starts again.
 import asyncio
 from collections import OrderedDict, defaultdict
 
+import settings
 import sources
 
-MAX_PLAYERS = 64  # least recently used players are dropped beyond this
+MAX_PLAYERS = settings.STATS_CACHE_PLAYERS  # least recently used players are dropped beyond this
 
 _cache = OrderedDict()  # (site, username lowercased, month) -> tuple of Game
 _locks = defaultdict(asyncio.Lock)  # one fetch at a time per player, so a game is never added twice
