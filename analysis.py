@@ -17,6 +17,7 @@ import statistics
 import struct
 from dataclasses import dataclass
 
+METHOD_VERSION = 1  # raised whenever a change to the method would change the figures, so older rows can be re-run
 INITIAL_CP = 15
 CAP = 1000  # accuracy treats every evaluation as at most this many centipawns, and a forced mate as exactly this
 _K = -0.00368208  # Lichess's fit of centipawns to winning chances

@@ -101,6 +101,10 @@ setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at s
 | `DB_LOCK_TIMEOUT` | Seconds to wait for another database write to finish. | 5 |
 | `BACKUP_DIR` | Folder for the nightly database backups. It must already exist, and should be on a different disk from the database. | `backups` beside the code |
 | `BACKUP_KEEP_DAYS` | Days of nightly backups to keep. | 100 |
+| `ANALYSIS_FULL_PRIORITY_GAMES` | A player's games in a month up to this number are analysed as usual. | 500 |
+| `ANALYSIS_MAX_GAMES` | Games from there up to this number go to the back of the analysis queue; beyond it they are not analysed. | 1000 |
+| `ANALYSIS_CLAIM_MINUTES` | How long the analysis worker has to finish a game before it goes back in the queue. | 30 |
+| `ANALYSIS_MAX_ATTEMPTS` | Tries before a game that keeps failing is given up on. | 5 |
 
 At startup the bot logs a warning for anything it can see is wrong, such as a missing `CONTACT` or a post channel
 it can't reach.
@@ -184,6 +188,7 @@ brings it in.
 | `backup.py` | The nightly database backup |
 | `analysis.py` | The game-analysis maths: accuracy, inaccuracies, mistakes, blunders, average loss (Lichess's published method) |
 | `divider.py` | Where a game's opening, middlegame and endgame start (a translation of the scalachess divider, MIT) |
+| `analysis_queue.py` | The queue of games waiting to be analysed and the results that come back (claiming, limits, giving games back) |
 | `settings.py` | Every setting, its default, and how `.env` overrides it |
 | `sources.py` | Chess.com and Lichess lookups |
 | `stats.py`, `openings.py` | The numbers and opening grouping, as pure functions |

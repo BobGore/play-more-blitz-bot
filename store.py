@@ -52,6 +52,64 @@ CREATE TABLE IF NOT EXISTS monthly_results (
     FOREIGN KEY (site, username) REFERENCES players (site, username)
 );
 
+-- Games to be analysed by the worker, and what came of it: one row per game, both sides. Times are UTC epoch
+-- seconds. The queue functions are in analysis_queue.py; the moves are never stored.
+CREATE TABLE IF NOT EXISTS game_analysis (
+    site      TEXT NOT NULL,
+    game_id   TEXT NOT NULL,
+    month     TEXT NOT NULL,               -- "YYYY-MM" of ended_at, UTC
+    ended_at  INTEGER NOT NULL,
+    time_control TEXT,                     -- "180+0"
+    result    TEXT NOT NULL CHECK (result IN ('white', 'black', 'draw')),
+    ending    TEXT,                        -- resigned, checkmated, timeout ...
+    opening_site TEXT,                     -- the site's own opening name and ECO code
+    eco_site  TEXT,
+    white_username TEXT NOT NULL COLLATE NOCASE,
+    black_username TEXT NOT NULL COLLATE NOCASE,
+    white_rating INTEGER, black_rating INTEGER,
+    white_rating_change INTEGER, black_rating_change INTEGER,   -- NULL where the site does not say
+
+    status    TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'done', 'skipped', 'failed')),
+    skip_reason TEXT,                      -- not_standard_start, over_monthly_limit, unavailable, too_short
+    priority  INTEGER NOT NULL DEFAULT 0,  -- 0 normal, 1 low: a member's games past the full-priority number
+    attempts  INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    queued_at INTEGER NOT NULL,
+    claimed_at INTEGER,
+    claimed_by TEXT,
+    analysed_at INTEGER,
+
+    engine TEXT, nodes INTEGER, method_version INTEGER, plies INTEGER,
+
+    white_accuracy REAL, black_accuracy REAL,
+    white_acc_opening REAL, black_acc_opening REAL,
+    white_acc_middle REAL, black_acc_middle REAL,
+    white_acc_end REAL, black_acc_end REAL,
+    white_inaccuracies INTEGER, black_inaccuracies INTEGER,
+    white_mistakes INTEGER, black_mistakes INTEGER,
+    white_blunders INTEGER, black_blunders INTEGER,
+    white_acpl INTEGER, black_acpl INTEGER,
+
+    middle_ply INTEGER, end_ply INTEGER,   -- where the middlegame and endgame start; NULL if never
+    eval_ply20 INTEGER,                    -- centipawns, White's point of view, after 10 moves each
+    evals BLOB,                            -- the evaluation after every ply, packed (analysis.pack_evals)
+    shape TEXT,                            -- our own game-shape label; filled in later
+
+    site_white_accuracy REAL, site_black_accuracy REAL,   -- the site's own figures, kept apart from ours
+
+    PRIMARY KEY (site, game_id)
+);
+CREATE INDEX IF NOT EXISTS game_analysis_queue ON game_analysis (status, priority, ended_at DESC);
+CREATE INDEX IF NOT EXISTS game_analysis_month ON game_analysis (site, month);
+CREATE INDEX IF NOT EXISTS game_analysis_white ON game_analysis (site, white_username, month);
+CREATE INDEX IF NOT EXISTS game_analysis_black ON game_analysis (site, black_username, month);
+
+-- When each analysis worker last asked for work, so the bot can tell whether one is alive.
+CREATE TABLE IF NOT EXISTS analysis_workers (
+    name      TEXT PRIMARY KEY,
+    last_seen INTEGER NOT NULL
+);
+
 -- Things the bot has posted on a schedule, so a restart never posts one twice.
 CREATE TABLE IF NOT EXISTS announcements (
     kind      TEXT NOT NULL,
@@ -135,6 +193,9 @@ def _transaction():
             yield conn
     finally:
         conn.close()
+
+
+transaction = _transaction  # for the modules that keep their own tables here (analysis_queue.py)
 
 
 def _player(row):

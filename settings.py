@@ -79,6 +79,19 @@ if POST_HOUR_UK > 23:
     _fail("POST_HOUR_UK", os.environ.get("POST_HOUR_UK"), "an hour from 0 to 23")
 CALL_DAYS_BEFORE = whole_number("CALL_DAYS_BEFORE", 7)  # the sign-up call goes out this many days before the month
 
+# --- Game analysis (the queue the EliteDesk worker draws from) ------------------------------------------
+
+# Per player per UTC month, counting their games in the order played: up to the first number they are analysed
+# as usual; from there up to the second they go to the back of the queue (analysed when nothing else is
+# waiting); beyond that they are not analysed at all.
+ANALYSIS_FULL_PRIORITY_GAMES = whole_number("ANALYSIS_FULL_PRIORITY_GAMES", 500)
+ANALYSIS_MAX_GAMES = whole_number("ANALYSIS_MAX_GAMES", 1000)
+if ANALYSIS_FULL_PRIORITY_GAMES > ANALYSIS_MAX_GAMES:
+    raise SystemExit(f"Settings ANALYSIS_FULL_PRIORITY_GAMES ({ANALYSIS_FULL_PRIORITY_GAMES}) and ANALYSIS_MAX_GAMES "
+                     f"({ANALYSIS_MAX_GAMES}) are not valid: the first can't be larger than the second.")
+ANALYSIS_CLAIM_MINUTES = whole_number("ANALYSIS_CLAIM_MINUTES", 30)  # a claimed game not finished by then goes back in the queue
+ANALYSIS_MAX_ATTEMPTS = whole_number("ANALYSIS_MAX_ATTEMPTS", 5)  # tries before a game is marked failed
+
 # --- What the summaries show -----------------------------------------------------------------------
 
 MIN_OPENING_GAMES = whole_number("MIN_OPENING_GAMES", 2)  # fewer games than this and an opening goes into "All others"
@@ -114,4 +127,5 @@ NAMES = (
     "MIN_OPENING_GAMES", "MIN_BEST_WORST_GAMES", "SIMILAR_RATING_BAND", "STATS_CACHE_PLAYERS",
     "REQUEST_TIMEOUT_SECONDS", "MONTH_TIMEOUT_SECONDS", "MONTH_STALL_SECONDS", "LICHESS_EXPORT_MIN_INTERVAL",
     "PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT", "BACKUP_DIR", "BACKUP_KEEP_DAYS",
+    "ANALYSIS_FULL_PRIORITY_GAMES", "ANALYSIS_MAX_GAMES", "ANALYSIS_CLAIM_MINUTES", "ANALYSIS_MAX_ATTEMPTS",
 )
