@@ -142,6 +142,36 @@ def opening_tables(games, min_games=MIN_OPENING_GAMES):
     return tables
 
 
+MIN_BEST_WORST_GAMES = 3  # an opening needs this many games before it can be called best or worst
+
+
+@dataclass(frozen=True)
+class OpeningVerdict:
+    """The best and worst opening in one colour's table, among those with enough games."""
+
+    best: Tally | None
+    worst: Tally | None
+    eligible: int  # how many openings had enough games to be judged
+    min_games: int
+
+
+def opening_verdict(rows, min_games=MIN_BEST_WORST_GAMES):
+    """Best and worst by score. The "All others" lump and "Unknown" are not openings, so
+    they are never judged. Ties go to the opening with more games (the stronger evidence),
+    then to the name, so the answer never depends on input order."""
+    eligible = [t for t in rows if t.label not in (OTHERS, openings.UNKNOWN) and t.games >= min_games]
+    if not eligible:
+        return OpeningVerdict(None, None, 0, min_games)
+    best = min(eligible, key=lambda t: (-t.score, -t.games, t.label))
+    worst = min(eligible, key=lambda t: (t.score, -t.games, t.label))
+    return OpeningVerdict(best, worst, len(eligible), min_games)
+
+
+def opening_verdicts(tables, min_games=MIN_BEST_WORST_GAMES):
+    """{"white": OpeningVerdict, "black": OpeningVerdict} from opening_tables()."""
+    return {colour: opening_verdict(rows, min_games) for colour, rows in tables.items()}
+
+
 # --- records ---------------------------------------------------------------
 
 

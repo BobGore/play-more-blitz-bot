@@ -154,6 +154,77 @@ def test_a_game_with_no_opening_counts_as_unknown():
     assert stats.opening_tables(games)["white"][0].label == "Unknown"
 
 
+# --- best and worst opening -------------------------------------------------
+
+
+def rows(*specs):
+    """Tallies from (label, wins, draws, losses)."""
+    return [stats.Tally(name, w + d + l, w, d, l) for name, w, d, l in specs]
+
+
+def test_the_minimum_is_three_games():
+    assert stats.MIN_BEST_WORST_GAMES == 3
+
+
+def test_best_and_worst_are_the_highest_and_lowest_scores_among_openings_with_enough_games():
+    v = stats.opening_verdict(rows(("London System", 1, 0, 3), ("Scotch Game", 3, 0, 0), ("Vienna Game", 2, 0, 2)))
+    assert (v.best.label, v.worst.label, v.eligible) == ("Scotch Game", "London System", 3)
+
+
+def test_an_opening_with_two_games_is_not_judged_but_three_is():
+    v = stats.opening_verdict(rows(("Lucky Gambit", 2, 0, 0), ("Scotch Game", 3, 0, 1), ("London System", 1, 0, 2)))
+    assert v.eligible == 2 and v.best.label == "Scotch Game" and v.worst.label == "London System"  # Lucky is left out
+    assert stats.opening_verdict(rows(("Lucky Gambit", 2, 0, 0))).eligible == 0
+    assert stats.opening_verdict(rows(("Three Gambit", 3, 0, 0))).eligible == 1
+
+
+def test_no_qualifying_opening_gives_no_verdict():
+    v = stats.opening_verdict(rows(("A Gambit", 1, 0, 1), ("B Gambit", 2, 0, 0)))
+    assert (v.best, v.worst, v.eligible, v.min_games) == (None, None, 0, 3)
+    assert stats.opening_verdict([]).eligible == 0
+
+
+def test_one_qualifying_opening_is_both_best_and_worst():
+    v = stats.opening_verdict(rows(("Only Game", 2, 1, 1)))
+    assert v.eligible == 1 and v.best is v.worst and v.best.label == "Only Game"
+
+
+def test_the_all_others_lump_and_unknown_are_never_judged_however_many_games_they_have():
+    v = stats.opening_verdict(rows(("All others", 20, 0, 0), ("Unknown", 0, 0, 20), ("Real Opening", 2, 0, 1)))
+    assert v.eligible == 1 and v.best.label == "Real Opening"
+
+
+def test_draws_count_half_in_the_score_used_for_ranking():
+    # Four draws is a 50% score: better than one win in four (25%), worse than three in four (75%).
+    below = stats.opening_verdict(rows(("Drawish Game", 0, 4, 0), ("Losing Game", 1, 0, 3)))
+    assert (below.best.label, below.worst.label) == ("Drawish Game", "Losing Game")
+    above = stats.opening_verdict(rows(("Drawish Game", 0, 4, 0), ("Winning Game", 3, 0, 1)))
+    assert (above.best.label, above.worst.label) == ("Winning Game", "Drawish Game")
+
+
+def test_ties_go_to_the_opening_with_more_games_then_the_name_and_never_to_input_order():
+    tied = rows(("B Game", 2, 0, 2), ("A Game", 1, 0, 1), ("C Game", 3, 0, 3))
+    for order in (tied, tied[::-1], [tied[1], tied[2], tied[0]]):
+        v = stats.opening_verdict([t for t in order if t.games >= 2], min_games=2)
+        assert (v.best.label, v.worst.label) == ("C Game", "C Game")  # all 50%: the biggest sample wins either way
+
+
+def test_a_custom_minimum_can_be_used():
+    v = stats.opening_verdict(rows(("Scotch Game", 2, 0, 0), ("London System", 0, 0, 2)), min_games=2)
+    assert (v.best.label, v.worst.label, v.min_games) == ("Scotch Game", "London System", 2)
+
+
+def test_verdicts_are_worked_out_for_each_colour_from_the_real_tables():
+    games = (
+        [game("W", colour="white", opening="Scotch-Game", when=at(i + 1)) for i in range(3)]
+        + [game("L", colour="white", opening="London-System", when=at(i + 5)) for i in range(3)]
+        + [game("W", colour="black", opening="Caro-Kann-Defense", when=at(i + 10)) for i in range(3)]
+    )
+    v = stats.opening_verdicts(stats.opening_tables(games))
+    assert (v["white"].best.label, v["white"].worst.label) == ("Scotch Game", "London System")
+    assert v["black"].eligible == 1 and v["black"].best.label == "Caro-Kann Defense"
+
+
 # --- records ---------------------------------------------------------------
 
 

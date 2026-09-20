@@ -124,6 +124,85 @@ def test_a_huge_opening_list_splits_into_messages_that_fit_and_repeats_the_heade
     assert all(f"Zork{i} Defense" in body for i in (0, 299, 599))  # and nothing was dropped
 
 
+# --- best and worst opening line -------------------------------------------
+
+
+def verdict(best=None, worst=None, eligible=0, min_games=3):
+    return stats.OpeningVerdict(best, worst, eligible, min_games)
+
+
+def test_the_best_and_worst_line():
+    v = verdict(stats.Tally("Indian Game", 4, 3, 0, 1), stats.Tally("London System", 5, 2, 0, 3), 2)
+    assert render.verdict_line(v) == "Best: Indian Game 75% (4 games) · Worst: London System 40% (5 games)"
+
+
+def test_one_qualifying_opening_is_named_on_its_own():
+    only = stats.Tally("Caro-Kann Defense", 7, 3, 1, 3)
+    assert render.verdict_line(verdict(only, only, 1)) == "Only Caro-Kann Defense has 3+ games (50%)."
+
+
+def test_no_qualifying_opening_says_why():
+    assert render.verdict_line(verdict()) == "No opening has 3+ games yet, so no best or worst."
+
+
+def test_openings_that_all_score_alike_are_not_split_into_a_best_and_a_worst():
+    a, b = stats.Tally("A Game", 4, 2, 0, 2), stats.Tally("B Game", 6, 3, 0, 3)
+    assert render.verdict_line(verdict(b, b, 2)) == "Every opening with 3+ games scores 50%."
+
+
+def test_the_line_states_the_minimum_it_was_worked_out_with():
+    assert "2+ games" in render.verdict_line(verdict(min_games=2))
+
+
+def with_verdicts(games):
+    tables = stats.opening_tables(games)
+    return render.render_mystats("Example_Player", "chess.com", "2026-09", stats.summarise(games, 1500), tables, stats.opening_verdicts(tables))
+
+
+def three_each():
+    return (
+        [game("W", colour="white", opening="Scotch-Game", when=at(1, i + 1)) for i in range(3)]
+        + [game("L", colour="white", opening="London-System", when=at(2, i + 1)) for i in range(3)]
+        + [game("W", colour="black", opening="Caro-Kann-Defense", when=at(3, i + 1)) for i in range(3)]
+        + [game("D", colour="black", opening="Dutch-Defense", when=at(4, i + 1)) for i in range(3)]
+    )
+
+
+def test_each_colours_table_is_followed_by_its_own_verdict_line():
+    text = "\n".join(with_verdicts(three_each()))
+    white = text.split("**As White**")[1].split("**As Black**")[0]
+    black = text.split("**As Black**")[1]
+    assert "Best: Scotch Game 100% (3 games) · Worst: London System 0% (3 games)" in white
+    assert "Best: Caro-Kann Defense 100% (3 games) · Worst: Dutch Defense 50% (3 games)" in black
+    assert white.rstrip().splitlines()[-1].startswith("Best:")  # the line comes straight after the table
+
+
+def test_a_colour_with_no_games_has_no_verdict_line_only_no_games():
+    only_white = [g for g in three_each() if g.colour == "white"]
+    text = "\n".join(with_verdicts(only_white))
+    assert "**As Black**\nNo games." in text and text.count("Best:") == 1
+
+
+def test_without_verdicts_the_layout_is_unchanged():
+    # The pinned layout test above passes no verdicts, so it has no such line.
+    assert "Best:" not in "\n".join(stats_messages()) and "No opening has" not in "\n".join(stats_messages())
+
+
+def test_the_verdict_line_stays_with_its_table_when_a_long_table_splits():
+    families = [f"Zork{i}-Defense" for i in range(400)]
+    # 3 games each so all qualify; the first is all losses and the last all wins, so a best and worst exist.
+    results = ["LLL" if i == 0 else "WWW" if i == 399 else "WLW" for i in range(400)]
+    games = [game(r, when=at(1 + i % 28, i % 24, i % 60), colour="white", opening=name, rating_after=1500)
+             for i, (name, rs) in enumerate(zip(families, results)) for r in rs]
+    messages = with_verdicts(games)
+    assert len(messages) > 1 and all(len(m) <= 2000 for m in messages)
+    with_line = [m for m in messages if "Best:" in m]
+    assert len(with_line) == 1
+    line = "Best: Zork399 Defense 100% (3 games) · Worst: Zork0 Defense 0% (3 games)"
+    assert "```\n" + line in with_line[0]  # straight after the closing fence of the table's last part
+    assert with_line[0] is messages[-1]  # on the final message, after the White table's last part
+
+
 # --- !mystatsfull ----------------------------------------------------------
 
 

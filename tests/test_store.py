@@ -219,6 +219,14 @@ def test_results_lists_active_players_including_ones_with_no_row_for_the_month()
     assert by_name["bob"].has_row is False and (by_name["bob"].games, by_name["bob"].start_rating) == (0, None)
 
 
+def test_results_can_be_limited_to_players_who_have_a_row_for_the_month():
+    add_alice("2026-09")
+    store.add_player("lichess", "late", BOB, "2026-10", 1400)  # registered in October: no September row
+    assert {r.username for r in store.results("2026-09")} == {"alice", "late"}
+    only = store.results("2026-09", require_row=True)
+    assert [r.username for r in only] == ["alice"] and only[0].has_row is True
+
+
 def test_results_carries_the_counts_the_flag_and_the_refresh_state():
     add_alice()
     store.apply_refresh("chess.com", "alice", "2026-09", **refresh_args(games=10, wins=6, draws=1, losses=3, end_rating=1530))
@@ -326,6 +334,144 @@ def test_signups_are_listed_in_name_order_across_sites():
         store.add_player(site_name, name, ALICE, "2026-09", 1500)
         store.join_100gob(site_name, name, "2026-10")
     assert store.signups("2026-10") == ["Amy", "bob", "zed"]
+
+
+def final(site_name, username, games=10, wins=6, draws=1, losses=3, end_rating=1530, last_game_at="2026-09-30T20:00:00+00:00"):
+    return dict(site=site_name, username=username, games=games, wins=wins, draws=draws, losses=losses,
+                end_rating=end_rating, last_game_at=last_game_at)
+
+
+NOW_ISO = "2026-10-01T00:30:00+00:00"
+
+
+def test_unclosed_months_lists_finished_months_with_an_open_row_oldest_first():
+    store.add_player("chess.com", "alice", ALICE, "2026-08", 1500)
+    store.add_player("chess.com", "bob", BOB, "2026-09", 1400)
+    store.add_player("lichess", "carol", ALICE, "2026-10", 1300)
+    assert store.unclosed_months("2026-10") == ["2026-08", "2026-09"]  # October is the current month
+    assert store.unclosed_months("2026-09") == ["2026-08"]
+    assert store.unclosed_months("2026-08") == []
+
+
+def test_unclosed_months_ignores_removed_players_and_closed_rows():
+    store.add_player("chess.com", "alice", ALICE, "2026-08", 1500)
+    store.add_player("chess.com", "bob", BOB, "2026-08", 1400)
+    store.remove_player("chess.com", "alice")
+    assert store.unclosed_months("2026-09") == ["2026-08"]  # bob's row is still open
+    store.close_month("2026-08", "2026-09", [final("chess.com", "bob")], NOW_ISO)
+    assert store.unclosed_months("2026-09") == []  # August is closed, and September hasn't finished
+    assert store.unclosed_months("2026-10") == ["2026-09"]  # closing August opened September for bob
+
+
+def test_open_players_are_the_active_players_with_an_open_row_for_the_month():
+    store.add_player("chess.com", "Zed", ALICE, "2026-09", 1500)
+    store.add_player("lichess", "amy", ALICE, "2026-09", 1400)
+    store.add_player("chess.com", "old", BOB, "2026-09", 1300)
+    store.add_player("chess.com", "elsewhere", BOB, "2026-08", 1300)
+    store.remove_player("chess.com", "old")
+    assert [(p.username, p.site) for p in store.open_players("2026-09")] == [("amy", "lichess"), ("Zed", "chess.com")]
+    assert [p.username for p in store.open_players("2026-08")] == ["elsewhere"]
+
+
+def test_closing_a_month_writes_the_final_figures_and_opens_the_next_month_from_the_closing_rating():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    assert store.close_month("2026-09", "2026-10", [final("chess.com", "alice", 40, 22, 3, 15, 1547)], NOW_ISO) == 1
+    r = store.month_row("chess.com", "alice", "2026-09")
+    assert (r["games"], r["wins"], r["draws"], r["losses"], r["end_rating"]) == (40, 22, 3, 15, 1547)
+    assert (r["closed_at"], r["refreshed_at"], r["refresh_error"]) == (NOW_ISO, NOW_ISO, None)
+    assert r["start_rating"] == 1500  # never moves
+    nxt = store.month_row("chess.com", "alice", "2026-10")
+    assert (nxt["start_rating"], nxt["end_rating"], nxt["games"], nxt["closed_at"], nxt["in_100gob"]) == (1547, 1547, 0, None, 0)
+
+
+def test_closing_overwrites_any_running_totals_with_the_authoritative_ones():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.apply_refresh("chess.com", "alice", "2026-09", expected_watermark=None, games=99, wins=99, draws=0, losses=0,
+                        end_rating=9999, last_game_at="2026-09-05T00:00:00+00:00", now="2026-09-05T00:00:00+00:00")
+    store.close_month("2026-09", "2026-10", [final("chess.com", "alice", 3, 1, 1, 1, 1490)], NOW_ISO)
+    r = store.month_row("chess.com", "alice", "2026-09")
+    assert (r["games"], r["wins"], r["end_rating"]) == (3, 1, 1490)
+
+
+def test_a_sign_up_for_the_next_month_is_applied_when_it_is_opened():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.add_player("chess.com", "bob", BOB, "2026-09", 1400)
+    store.join_100gob("chess.com", "alice", "2026-10")
+    store.close_month("2026-09", "2026-10", [final("chess.com", "alice"), final("chess.com", "bob")], NOW_ISO)
+    assert store.month_row("chess.com", "alice", "2026-10")["in_100gob"] == 1
+    assert store.month_row("chess.com", "bob", "2026-10")["in_100gob"] == 0
+    assert store.signups("2026-10") == []  # used up
+
+
+def test_the_challenge_flag_of_the_closed_month_is_kept_and_not_carried_over():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.join_100gob("chess.com", "alice", "2026-09")
+    store.close_month("2026-09", "2026-10", [final("chess.com", "alice")], NOW_ISO)
+    assert store.month_row("chess.com", "alice", "2026-09")["in_100gob"] == 1
+    assert store.month_row("chess.com", "alice", "2026-10")["in_100gob"] == 0  # opt in afresh
+
+
+def test_a_removed_players_open_row_is_closed_as_it_stands_without_needing_figures():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.add_player("chess.com", "gone", BOB, "2026-09", 1400)
+    store.apply_refresh("chess.com", "gone", "2026-09", expected_watermark=None, games=4, wins=2, draws=0, losses=2,
+                        end_rating=1410, last_game_at="2026-09-03T00:00:00+00:00", now="2026-09-03T00:00:00+00:00")
+    store.remove_player("chess.com", "gone")
+    store.close_month("2026-09", "2026-10", [final("chess.com", "alice")], NOW_ISO)
+    gone = store.month_row("chess.com", "gone", "2026-09")
+    assert (gone["closed_at"], gone["games"], gone["end_rating"]) == (NOW_ISO, 4, 1410)  # closed, figures untouched
+    assert store.month_row("chess.com", "gone", "2026-10") is None  # and not carried into October
+    assert store.unclosed_months("2026-10") == []
+
+
+def test_closing_twice_changes_nothing_the_second_time():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    assert store.close_month("2026-09", "2026-10", [final("chess.com", "alice", end_rating=1547)], NOW_ISO) == 1
+    assert store.close_month("2026-09", "2026-10", [final("chess.com", "alice", 999, end_rating=1)], "2026-10-02T00:00:00+00:00") == 0
+    r = store.month_row("chess.com", "alice", "2026-09")
+    assert (r["games"], r["end_rating"], r["closed_at"]) == (10, 1547, NOW_ISO)
+    assert store.month_row("chess.com", "alice", "2026-10")["start_rating"] == 1547
+
+
+def test_an_existing_next_month_row_is_kept_not_overwritten():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    with store._transaction() as conn:  # October's row already exists, with a different start and some games
+        store._open_month(conn, "chess.com", "alice", "2026-10", 1500)
+        conn.execute("UPDATE monthly_results SET games = 3 WHERE month = '2026-10'")
+    store.close_month("2026-09", "2026-10", [final("chess.com", "alice", end_rating=1547)], NOW_ISO)
+    nxt = store.month_row("chess.com", "alice", "2026-10")
+    assert (nxt["start_rating"], nxt["games"]) == (1500, 3)
+
+
+def test_closing_is_all_or_nothing_if_the_write_fails_part_way(monkeypatch):
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    store.add_player("chess.com", "bob", BOB, "2026-09", 1400)
+    real = store._open_month
+    calls = []
+
+    def flaky(conn, site_name, username, month, start):
+        calls.append(username)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk full")  # the second player's next-month row fails
+        return real(conn, site_name, username, month, start)
+
+    monkeypatch.setattr(store, "_open_month", flaky)
+    with pytest.raises(sqlite3.OperationalError):
+        store.close_month("2026-09", "2026-10", [final("chess.com", "alice"), final("chess.com", "bob")], NOW_ISO)
+    monkeypatch.setattr(store, "_open_month", real)
+    for name in ("alice", "bob"):
+        assert store.month_row("chess.com", name, "2026-09")["closed_at"] is None  # nothing was closed
+        assert store.month_row("chess.com", name, "2026-10") is None  # and nothing was opened
+    assert store.unclosed_months("2026-10") == ["2026-09"]
+
+
+def test_closed_months_since_finds_recent_closes_only():
+    store.add_player("chess.com", "alice", ALICE, "2026-08", 1500)
+    store.close_month("2026-08", "2026-09", [final("chess.com", "alice")], "2026-09-01T00:30:00+00:00")
+    store.close_month("2026-09", "2026-10", [final("chess.com", "alice")], "2026-10-01T00:30:00+00:00")
+    assert store.closed_months_since("2026-09-28T00:00:00+00:00") == ["2026-09"]
+    assert store.closed_months_since("2026-08-01T00:00:00+00:00") == ["2026-08", "2026-09"]
+    assert store.closed_months_since("2026-11-01T00:00:00+00:00") == []
 
 
 def test_an_announcement_can_be_claimed_only_once_and_released_to_try_again():

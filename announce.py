@@ -29,6 +29,40 @@ def signup_call_due(now):
     return None
 
 
+def month_end_post_due(month, now):
+    """Whether it is time to post about `month`'s ending: from 9am UK time on the day after
+    it finishes (the 1st of the next month), and any time after that."""
+    following = first_of_next_month(date(int(month[:4]), int(month[5:7]), 1))
+    return now >= datetime.combine(following, POST_TIME.replace(tzinfo=None), tzinfo=UK)
+
+
+def uk_date(now):
+    """The UK calendar date at `now`, as YYYY-MM-DD."""
+    return now.astimezone(UK).date().isoformat()
+
+
+def well_done_text(names, target):
+    """The congratulation for everyone who reached the target, or None if nobody did."""
+    if not names:
+        return None
+    listed = ", ".join(f"`{n}`" for n in names)
+    return f"Well done to {listed} for playing {target} games of blitz and completing 100GOB!"
+
+
+def close_failure_text(month, failures):
+    """The notice that a month couldn't be closed, naming each player that failed and why."""
+    lines = [
+        f"**Couldn't close {render.month_title(month)}.** Nothing has been posted or changed, "
+        "because these players' games couldn't be fetched:"
+    ]
+    lines += [f"`{f.username}` ({f.site}): {f.reason[:120]}" for f in failures]
+    lines.append(
+        "Once that is sorted out, or the player is taken off with `!remove`, an admin can run `!closemonth`. "
+        "The bot also retries by itself every half hour."
+    )
+    return "\n".join(lines)
+
+
 def signup_call_text(month, target):
     return (
         f"**100GOB for {render.month_title(month)}: sign-ups are open**\n"

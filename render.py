@@ -75,16 +75,17 @@ def _next_month_title(month):
     return following.strftime("%B %Y")
 
 
-def render_results(rows, month, now, target, signups=()):
+def render_results(rows, month, now, target, signups=(), final=False):
     """The `!results` table for a month as a list of messages, ready to send in order.
 
     Everyone registered is shown, most games first. A ! before a name means its
     latest refresh failed (the reason is listed underneath); a ? means nothing has
     been counted for it yet. `signups` are the players already signed up for the
-    month after this one, listed under the table.
+    month after this one, listed under the table. With `final` it is the closed
+    month's table: titled "final", with "Final results" in place of how fresh it is.
     """
     rows = sorted(rows, key=_sort_key)
-    title = f"**{month_title(month)} so far**"
+    title = f"**{month_title(month)} {'final' if final else 'so far'}**"
     if not rows:
         return [f"{title}\nNobody is registered yet. Use `!add <username> <site>`."]
 
@@ -108,7 +109,7 @@ def render_results(rows, month, now, target, signups=()):
             f"  {games[i]:>{games_w}}  {record[i]:>{record_w}}  {gains[i]:>{gain_w}}  {_challenge(row, target)}".rstrip()
         )
 
-    footer = _footer(rows, now)
+    footer = _footer(rows, now, final)
     if signups:
         footer += _signup_lines(_next_month_title(month), signups)
     return _split(title, header, rule, lines, footer)
@@ -128,9 +129,12 @@ def _signup_lines(month_title_, names, width=100):
     return "\n" + "\n".join(lines)
 
 
-def _footer(rows, now):
+def _footer(rows, now, final=False):
     oldest = _last_refreshed(rows)
-    parts = ["Updated " + age(now - oldest) if oldest else "Not updated yet"]
+    if final:
+        parts = ["Final results"]
+    else:
+        parts = ["Updated " + age(now - oldest) if oldest else "Not updated yet"]
     parts.append("CC = Chess.com, LI = Lichess")
     text = " · ".join(parts)
 
@@ -225,8 +229,25 @@ def _player_title(username, site, month, full):
     return f"`{username}` · {SITE_NAMES.get(site, site)} · {month_title(month)} so far" + (" · full" if full else "")
 
 
-def render_mystats(username, site, month, results, openings):
-    """The default summary: the results block, then opening tables as White and Black."""
+def verdict_line(v):
+    """One line naming the best and worst opening, or saying why it can't yet."""
+    if v.eligible == 0:
+        return f"No opening has {v.min_games}+ games yet, so no best or worst."
+    if v.eligible == 1:
+        return f"Only {v.best.label} has {v.min_games}+ games ({_pct(v.best.score)})."
+    if v.best.score == v.worst.score:
+        return f"Every opening with {v.min_games}+ games scores {_pct(v.best.score)}."
+    return (
+        f"Best: {v.best.label} {_pct(v.best.score)} ({v.best.games} games) · "
+        f"Worst: {v.worst.label} {_pct(v.worst.score)} ({v.worst.games} games)"
+    )
+
+
+def render_mystats(username, site, month, results, openings, verdicts=None):
+    """The default summary: the results block, then opening tables as White and Black.
+
+    `verdicts` (stats.opening_verdicts) adds a best and worst opening line under each table.
+    """
     parts = [f"{_player_title(username, site, month, False)}\n```\n{results_block(results)}\n```"]
     if results.games == 0:
         parts.append("No rated blitz games yet this month.")
@@ -235,6 +256,8 @@ def render_mystats(username, site, month, results, openings):
         rows = openings[colour]
         if rows:
             parts += _table_parts(title, tally_table(rows, "Opening"))
+            if verdicts:
+                parts[-1] += "\n" + verdict_line(verdicts[colour])  # stays with the table's last part
         else:
             parts.append(f"**{title}**\nNo games.")
     return _pack(parts)
@@ -319,3 +342,6 @@ def _fit(text):
     if current:
         pieces.append(current)
     return pieces
+
+
+fit = _fit  # for callers outside this module that need to cut a long text into messages

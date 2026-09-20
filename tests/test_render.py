@@ -167,6 +167,28 @@ def test_nobody_registered_says_how_to_start():
     assert "Nobody is registered yet" in message and "!add" in message
 
 
+# --- the final table -------------------------------------------------------
+
+
+def test_a_final_table_says_final_and_has_no_freshness_line():
+    rows = [row("alice", games=120, wins=70, draws=5, losses=45, start=1500, end=1560)]
+    (message,) = render.render_results(rows, "2026-09", NOW, 100, final=True)
+    assert message.startswith("**September 2026 final**\n")
+    assert "Final results" in message and "Updated" not in message and "so far" not in message
+    assert "120  70-5-45   +60" in message
+
+
+def test_the_same_rows_without_final_still_read_so_far():
+    (message,) = render.render_results([row()], "2026-09", NOW, 100)
+    assert message.startswith("**September 2026 so far**\n") and "Updated" in message and "Final results" not in message
+
+
+def test_a_final_table_splits_like_any_other():
+    messages = render.render_results(many(120), "2026-09", NOW, 100, final=True)
+    assert len(messages) > 1 and all(len(m) <= 2000 for m in messages)
+    assert messages[0].startswith("**September 2026 final**") and "Final results" in messages[-1]
+
+
 # --- next month's sign-ups -------------------------------------------------
 
 

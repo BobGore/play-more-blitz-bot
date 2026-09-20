@@ -650,6 +650,33 @@ def test_mystats_with_no_name_shows_the_callers_own_account(played):
     assert played["calls"] == [("chess.com", "Alice", sources.current_month())]
 
 
+def test_mystats_says_there_is_no_best_or_worst_opening_yet_when_no_opening_has_three_games(played):
+    registered(ALICE, "Alice")  # the sample month has at most two games in any opening
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert "No opening has 3+ games yet, so no best or worst." in "\n".join(said(ctx))
+
+
+def test_mystats_names_the_best_and_worst_opening_once_there_are_enough_games(played):
+    from helpers import at, game
+
+    played["games"] = (
+        [game("W", colour="white", opening="Scotch-Game", when=at(1, i + 1), rating_after=1500) for i in range(3)]
+        + [game("L", colour="white", opening="London-System", when=at(2, i + 1), rating_after=1500) for i in range(3)]
+    )
+    registered(ALICE, "Alice")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx)
+    assert "Best: Scotch Game 100% (3 games) · Worst: London System 0% (3 games)" in "\n".join(said(ctx))
+
+
+def test_mystatsfull_does_not_carry_the_opening_verdict(played):
+    registered(ALICE, "Alice")
+    ctx = make_ctx(ALICE)
+    run(botmod.mystatsfull, ctx)
+    assert "Best:" not in "\n".join(said(ctx)) and "best or worst" not in "\n".join(said(ctx))
+
+
 def test_anyone_can_look_at_any_registered_player_by_name_which_is_the_friend_check(played):
     registered(ALICE, "Alice")
     ctx = make_ctx(BOB)  # Bob added nothing, and isn't an admin
@@ -846,7 +873,7 @@ def test_a_command_in_a_disallowed_channel_is_silent_in_discord_but_logged(caplo
     with caplog.at_level("INFO", logger="playmoreblitz"):
         asyncio.run(botmod.on_command_error(ctx, commands.CheckFailure("nope")))
     assert ctx.send.await_count == 0 and reactions(ctx) == []
-    assert "!results in channel 777, which is not an allowed channel" in caplog.text
+    assert "!results in channel 777 (not an allowed channel" in caplog.text
 
 
 def test_every_command_that_runs_is_logged(caplog):

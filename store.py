@@ -201,6 +201,83 @@ def signups(month):
     return [r["username"] for r in rows]
 
 
+def unclosed_months(before):
+    """Months earlier than `before` ("YYYY-MM") in which an active player still has an open
+    row, oldest first: the months that have ended but not been closed."""
+    with _transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT m.month FROM monthly_results m
+            JOIN players p ON p.site = m.site AND p.username = m.username
+            WHERE m.closed_at IS NULL AND p.active = 1 AND m.month < ? ORDER BY m.month
+            """,
+            (before,),
+        ).fetchall()
+    return [r["month"] for r in rows]
+
+
+def open_players(month):
+    """Active players who have an open (unclosed) row for `month`, in name order."""
+    with _transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.* FROM players p
+            JOIN monthly_results m ON m.site = p.site AND m.username = p.username
+            WHERE m.month = ? AND m.closed_at IS NULL AND p.active = 1 ORDER BY p.username COLLATE NOCASE, p.site
+            """,
+            (month,),
+        ).fetchall()
+    return [_player(r) for r in rows]
+
+
+def closed_months_since(cutoff):
+    """Months closed at or after `cutoff` (an ISO time), oldest first."""
+    with _transaction() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT month FROM monthly_results WHERE closed_at IS NOT NULL AND closed_at >= ? ORDER BY month", (cutoff,)
+        ).fetchall()
+    return [r["month"] for r in rows]
+
+
+def close_month(month, next_month, finals, now):
+    """Close `month` for every player in `finals`, and open `next_month` for them, in one step.
+
+    Each entry of `finals` is a dict with site, username, games, wins, draws, losses,
+    end_rating and last_game_at, the authoritative figures for the whole month. Their
+    rows are overwritten with them and marked closed; each player's `next_month` row is
+    created with the closing rating as its start rating (a sign-up for that month is
+    applied). Removed players' open rows for the month are marked closed as they stand.
+    An already closed row is left alone. Returns how many rows were closed. Everything
+    happens together or not at all.
+    """
+    closed = 0
+    with _transaction() as conn:
+        for f in finals:
+            cur = conn.execute(
+                """
+                UPDATE monthly_results
+                SET games = ?, wins = ?, draws = ?, losses = ?, end_rating = ?, last_game_at = ?,
+                    closed_at = ?, refreshed_at = ?, refresh_error = NULL
+                WHERE site = ? AND username = ? AND month = ? AND closed_at IS NULL
+                """,
+                (f["games"], f["wins"], f["draws"], f["losses"], f["end_rating"], f["last_game_at"], now, now,
+                 f["site"], f["username"], month),
+            )
+            if cur.rowcount:
+                closed += 1
+                _open_month(conn, f["site"], f["username"], next_month, f["end_rating"])
+        conn.execute(
+            """
+            UPDATE monthly_results SET closed_at = ?
+            WHERE month = ? AND closed_at IS NULL
+              AND EXISTS (SELECT 1 FROM players p WHERE p.site = monthly_results.site
+                          AND p.username = monthly_results.username AND p.active = 0)
+            """,
+            (now, month),
+        )
+    return closed
+
+
 def claim_announcement(kind, month, now):
     """Reserve the right to post `kind` for `month`. True if this call got it, False if it was already posted."""
     with _transaction() as conn:
@@ -270,10 +347,12 @@ def remove_player(site, username):
         return cur.rowcount > 0
 
 
-def results(month):
+def results(month, require_row=False):
     """One ResultRow per active player for `month`, in no particular order.
 
-    A player with no row for that month still appears, with has_row False.
+    A player with no row for that month still appears, with has_row False, unless
+    `require_row` is set (a closed month's final table lists only players who were
+    in it, not someone who registered afterwards).
     """
     with _transaction() as conn:
         rows = conn.execute(
@@ -284,9 +363,9 @@ def results(month):
                    COALESCE(m.in_100gob, 0) AS in_100gob, m.refreshed_at, m.refresh_error
             FROM players p
             LEFT JOIN monthly_results m ON m.site = p.site AND m.username = p.username AND m.month = ?
-            WHERE p.active = 1
+            WHERE p.active = 1 AND (? = 0 OR m.site IS NOT NULL)
             """,
-            (month,),
+            (month, 1 if require_row else 0),
         ).fetchall()
     return [
         ResultRow(r["site"], r["username"], bool(r["has_row"]), r["start_rating"], r["end_rating"], r["games"], r["wins"],

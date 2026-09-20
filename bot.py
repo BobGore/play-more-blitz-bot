@@ -7,7 +7,7 @@ Commands so far: !add, !remove, !results and a help command. The rest come in la
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import aiohttp
@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 
 import announce
 import gamecache
+import monthend
 import refresh
 import render
 import sources
@@ -81,10 +82,18 @@ bot = commands.Bot(
 
 @tasks.loop(minutes=REFRESH_INTERVAL_MINUTES)
 async def refresh_loop():
-    """Every REFRESH_INTERVAL_MINUTES, and once as soon as it starts (so a restart is never stale)."""
+    """Every REFRESH_INTERVAL_MINUTES, and once as soon as it starts (so a restart is never stale).
+
+    First it closes any finished month that is still open (retrying each time until it
+    works), so a new month's rows exist before they are refreshed; then it refreshes
+    everyone; then it posts anything about a month's ending that has become due.
+    """
     try:
+        for result in await monthend.close_due_months():
+            log.info("month close for %s: %s", result.month, "closed" if result.ok else f"failed for {len(result.failures)} player(s)")
         outcomes = await refresh.refresh_all(sources.current_month())
         log.info("refresh cycle finished: %s", outcomes or "nobody registered")
+        await post_month_end_if_due()
     except Exception:  # one bad cycle must not stop the loop
         log.exception("refresh cycle crashed")
 
@@ -98,8 +107,7 @@ async def post_signup_call_if_due():
     if not await asyncio.to_thread(store.claim_announcement, "signup_call", month, now.isoformat()):
         return False  # already posted, perhaps before a restart
     try:
-        channel = bot.get_channel(POST_CHANNEL_ID) or await bot.fetch_channel(POST_CHANNEL_ID)
-        await channel.send(announce.signup_call_text(month, GOB_TARGET))
+        await (await _post_channel()).send(announce.signup_call_text(month, GOB_TARGET))
     except Exception:
         log.exception("couldn't post the 100GOB sign-up call for %s", month)
         await asyncio.to_thread(store.release_announcement, "signup_call", month)  # so the next try can post it
@@ -108,13 +116,67 @@ async def post_signup_call_if_due():
     return True
 
 
+async def _post_channel():
+    return bot.get_channel(POST_CHANNEL_ID) or await bot.fetch_channel(POST_CHANNEL_ID)
+
+
+async def send_final_table(channel, month, now):
+    """Post a closed month's final table, then well done to everyone who reached the target."""
+    rows = await asyncio.to_thread(store.results, month, True)  # only players who were in that month
+    for message in render.render_results(rows, month, now, GOB_TARGET, final=True):
+        await channel.send(message)
+    finishers = sorted((r.username for r in rows if r.in_100gob and r.games >= GOB_TARGET), key=str.lower)
+    congratulation = announce.well_done_text(finishers, GOB_TARGET)
+    if congratulation:
+        for piece in render.fit(congratulation):
+            await channel.send(piece)
+
+
+async def post_month_end_if_due():
+    """Post the final table of any month that has been closed and is due to be posted, and a
+    notice about any finished month that still can't be closed. Each is posted once (a
+    notice once a day). Returns whether anything was posted."""
+    now = datetime.now(timezone.utc)
+    posted = False
+
+    cutoff = (now - timedelta(days=3)).isoformat()  # only recent closes: never re-post old history
+    for month in await asyncio.to_thread(store.closed_months_since, cutoff):
+        if not announce.month_end_post_due(month, now):
+            continue
+        if not await asyncio.to_thread(store.claim_announcement, "month_end", month, now.isoformat()):
+            continue  # already posted, perhaps before a restart
+        try:
+            await send_final_table(await _post_channel(), month, now)
+            log.info("posted the final table for %s", month)
+            posted = True
+        except Exception:
+            log.exception("couldn't post the final table for %s", month)
+            await asyncio.to_thread(store.release_announcement, "month_end", month)
+
+    for month in await asyncio.to_thread(store.unclosed_months, sources.current_month(now)):
+        failures = monthend.last_failures.get(month)
+        if not failures or not announce.month_end_post_due(month, now):
+            continue
+        if not await asyncio.to_thread(store.claim_announcement, "close_failed", f"{month}/{announce.uk_date(now)}", now.isoformat()):
+            continue
+        try:
+            await (await _post_channel()).send(announce.close_failure_text(month, failures))
+            log.info("posted the failure notice for %s", month)
+            posted = True
+        except Exception:
+            log.exception("couldn't post the failure notice for %s", month)
+            await asyncio.to_thread(store.release_announcement, "close_failed", f"{month}/{announce.uk_date(now)}")
+    return posted
+
+
 @tasks.loop(time=announce.POST_TIME)
 async def daily_posts():
     """Every day at 9am UK time."""
-    try:
-        await post_signup_call_if_due()
-    except Exception:
-        log.exception("scheduled posts crashed")
+    for post in (post_signup_call_if_due, post_month_end_if_due):
+        try:
+            await post()
+        except Exception:
+            log.exception("scheduled post %s crashed", post.__name__)
 
 
 _background = set()  # keeps a reference to running tasks so they aren't garbage collected
@@ -360,7 +422,8 @@ async def _player_stats(ctx, username, site, command, full):
     if full:
         messages = render.render_mystatsfull(player.username, player.site, month, summary, stats.records(games), stats.splits(games, start))
     else:
-        messages = render.render_mystats(player.username, player.site, month, summary, stats.opening_tables(games))
+        tables = stats.opening_tables(games)
+        messages = render.render_mystats(player.username, player.site, month, summary, tables, stats.opening_verdicts(tables))
     for message in messages:
         await ctx.send(message)
 
@@ -377,6 +440,48 @@ async def mystats(ctx, username: Optional[str] = None, site: Optional[str] = Non
 async def mystatsfull(ctx, username: Optional[str] = None, site: Optional[str] = None):
     """Records and the splits by opponent rating, colour, weekday and time of day."""
     await _player_stats(ctx, username, site, "mystatsfull", full=True)
+
+
+def _admin_only(ctx):
+    return _is_admin(ctx.author.id)
+
+
+@bot.command(name="closemonth")
+@commands.check(_admin_only)
+async def closemonth(ctx):
+    """Admins only: close every finished month that is still open and post its final table.
+
+    The same job that runs by itself, run now, for when it couldn't (a site was down, a
+    player's account had gone). It never closes a month twice or posts a table twice.
+    """
+    now = datetime.now(timezone.utc)
+    if not await asyncio.to_thread(store.unclosed_months, sources.current_month(now)):
+        await ctx.send("Nothing to close: every finished month is already closed.")
+        return
+
+    async with ctx.typing():
+        results_ = await monthend.close_due_months(now=now)
+
+    channel = await _post_channel()
+    everything_ok = True
+    for result in results_:
+        try:
+            if not result.ok:
+                everything_ok = False
+                await channel.send(announce.close_failure_text(result.month, result.failures))
+            elif await asyncio.to_thread(store.claim_announcement, "month_end", result.month, now.isoformat()):
+                try:
+                    await send_final_table(channel, result.month, now)
+                except Exception:
+                    await asyncio.to_thread(store.release_announcement, "month_end", result.month)
+                    raise
+        except Exception:
+            log.exception("!closemonth couldn't post for %s", result.month)
+            everything_ok = False
+            await _reject(ctx, f"{render.month_title(result.month)} is closed but I couldn't post it - check the logs")
+            return
+    log.info("!closemonth by %s: %s", ctx.author.id, [(r.month, r.ok) for r in results_])
+    await ctx.message.add_reaction("✅" if everything_ok else "❌")
 
 
 @bot.command()
@@ -405,7 +510,7 @@ async def on_command_error(ctx, error):
         # Silent in Discord (the bot shouldn't answer every "!" message), but say so in the log.
         log.info("ignored: no command called !%s (channel %s)", ctx.invoked_with, ctx.channel.id)
     elif isinstance(error, commands.CheckFailure):
-        log.info("ignored: !%s in channel %s, which is not an allowed channel", ctx.invoked_with, ctx.channel.id)
+        log.info("ignored: !%s in channel %s (not an allowed channel, or the command is not permitted)", ctx.invoked_with, ctx.channel.id)
     else:
         log.exception("command failed", exc_info=error)
         await _reject(ctx, "something went wrong, check the logs")
