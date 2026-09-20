@@ -174,12 +174,16 @@ venv/bin/python -m pytest
 ```
 
 The tests need no network and no Discord. A few known-answer tests read real game data from
-`tests/fixtures_private/` (git-ignored, because real games name real people) and skip themselves when it is absent.
+`tests/fixtures_private/` (git-ignored, because real games name real people) and skip themselves when it is absent. The
+analysis tests need `chess` (python-chess) for some checks and skip those without it; `pip install -r requirements-dev.txt`
+brings it in.
 
 | File | Purpose |
 | --- | --- |
 | `bot.py` | Commands and the scheduled tasks |
 | `backup.py` | The nightly database backup |
+| `analysis.py` | The game-analysis maths: accuracy, inaccuracies, mistakes, blunders, average loss (Lichess's published method) |
+| `divider.py` | Where a game's opening, middlegame and endgame start (a translation of the scalachess divider, MIT) |
 | `settings.py` | Every setting, its default, and how `.env` overrides it |
 | `sources.py` | Chess.com and Lichess lookups |
 | `stats.py`, `openings.py` | The numbers and opening grouping, as pure functions |
