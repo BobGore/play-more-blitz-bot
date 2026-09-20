@@ -219,6 +219,7 @@ def configuration_warnings():
 @bot.event
 async def on_ready():
     log.info("connected as %s", bot.user)
+    log.info("database: %s", store.DB_PATH)
     for problem in configuration_warnings():
         log.warning(problem)
     if not refresh_loop.is_running():  # on_ready can fire again after a reconnect
@@ -585,6 +586,7 @@ if __name__ == "__main__":
     token = os.environ.get("DISCORD_TOKEN")
     if not token:
         raise SystemExit("DISCORD_TOKEN is not set")
+    store.check_location()  # refuse to start (and let the service retry) if the database's disk isn't there
     # Held for as long as the bot runs: a second copy from this folder refuses to start.
     _instance_lock = singleton.acquire(Path(__file__).with_name("playmoreblitz.lock"))
     # log_handler=None: our own logging setup above is used, so each line appears once.

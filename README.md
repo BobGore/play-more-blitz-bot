@@ -70,6 +70,11 @@ Copy `.env.example` to `.env` and fill it in. It is ignored by git and must stay
 - `DISCORD_TOKEN`: the bot's token.
 - `CONTACT`: an address or URL that Chess.com and Lichess can use to reach you if the bot misbehaves. It is sent
   in the User-Agent of site requests. Without it the bot still works but the sites can't contact you.
+- `PLAYMOREBLITZ_DB` (optional): where the database file lives, if not beside the code. Use it to keep the data on a
+  larger disk, in a folder of its own that already exists there. If that folder is missing (say the disk hasn't
+  mounted yet) the bot refuses to start, and a service manager will keep retrying, so it can never quietly begin a
+  new empty database in the wrong place. On a systemd machine add `RequiresMountsFor=/path/to/that/disk` to the
+  service so it waits for the disk.
 
 The other settings are constants at the top of `bot.py`:
 
@@ -153,3 +158,9 @@ The tests need no network and no Discord. A few known-answer tests read real gam
 | `announce.py` | When the scheduled posts are due, and what they say |
 | `gamecache.py` | A player's games held in memory for `!mystats` |
 | `singleton.py` | Refuses a second copy of the bot |
+
+## Licence
+
+GPL-3.0, see `LICENSE`. The planned game analysis is a reimplementation of the accuracy, inaccuracy/mistake/blunder
+and game-phase methods that [Lichess](https://lichess.org) publishes, and the analysis engine is Stockfish, itself
+GPL-3.0. Thanks to the Lichess and Stockfish teams.

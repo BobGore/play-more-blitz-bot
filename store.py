@@ -4,12 +4,15 @@ Every function is synchronous and short; call them through asyncio.to_thread fro
 the bot. A player is identified by (site, username), username case-insensitively.
 """
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-DB_PATH = Path(__file__).with_name("playmoreblitz.db")
+# Where the database lives. By default beside the code; set PLAYMOREBLITZ_DB (in .env) to put it
+# elsewhere, for instance in a folder on a larger disk.
+DB_PATH = Path(os.environ.get("PLAYMOREBLITZ_DB") or Path(__file__).with_name("playmoreblitz.db"))
 DB_LOCK_TIMEOUT = 5.0  # seconds to retry if another thread is mid-write, before giving up
 
 ADDED = "added"
@@ -68,6 +71,18 @@ CREATE TABLE IF NOT EXISTS gob_signups (
     FOREIGN KEY (site, username) REFERENCES players (site, username)
 );
 """
+
+
+def check_location():
+    """Exit with a clear message if the database's folder doesn't exist.
+
+    The usual cause is a database kept on a disk that hasn't been mounted yet. Failing here
+    means the service restarts and tries again, instead of the bot carrying on with no data.
+    (SQLite never creates a missing folder, so it can't quietly start a new empty database on
+    the wrong disk as long as the database sits in a folder of its own on that disk.)
+    """
+    if not DB_PATH.parent.is_dir():
+        raise SystemExit(f"The database folder {DB_PATH.parent} does not exist. Is its disk mounted? (PLAYMOREBLITZ_DB={DB_PATH})")
 
 
 @dataclass(frozen=True)

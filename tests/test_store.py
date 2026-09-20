@@ -588,3 +588,42 @@ def test_a_failed_add_leaves_no_half_written_player(monkeypatch):
 
     monkeypatch.setattr(sqlite3, "connect", real_connect)  # back to a healthy database
     assert store.get_player("chess.com", "alice") is None
+
+
+def test_check_location_passes_when_the_database_folder_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
+    store.check_location()  # no exception
+
+
+def test_check_location_refuses_when_the_database_folder_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "not_mounted" / "test.db")
+    with pytest.raises(SystemExit) as stopped:
+        store.check_location()
+    assert "not_mounted" in str(stopped.value)
+    assert not (tmp_path / "not_mounted").exists()  # and it never made the folder
+
+
+def test_a_missing_database_folder_is_not_quietly_replaced_by_an_empty_database(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "not_mounted" / "test.db")
+    with pytest.raises(sqlite3.OperationalError):
+        store.get_player("chess.com", "alice")
+    assert not (tmp_path / "not_mounted").exists()
+
+
+def test_the_database_path_can_be_set_from_the_environment(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    def path_seen(**env):
+        base = {k: v for k, v in os.environ.items() if k != "PLAYMOREBLITZ_DB"}
+        code = "import store; print(store.DB_PATH)"
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                             cwd=Path(store.__file__).parent, env={**base, **env})
+        return Path(out.stdout.strip())
+
+    target = tmp_path / "elsewhere" / "pmb.db"
+    assert path_seen(PLAYMOREBLITZ_DB=str(target)) == target
+    assert path_seen().name == "playmoreblitz.db"
+    assert path_seen(PLAYMOREBLITZ_DB="").name == "playmoreblitz.db"  # an empty setting means "not set"

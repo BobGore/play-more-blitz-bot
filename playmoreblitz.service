@@ -3,6 +3,9 @@ Description=PlayMoreBlitz Discord bot
 After=network-online.target
 Wants=network-online.target
 
+# If the database lives on another disk (PLAYMOREBLITZ_DB in .env), also wait for it to be mounted:
+# RequiresMountsFor=/mnt/archive
+
 [Service]
 Type=simple
 User=CHANGEME
