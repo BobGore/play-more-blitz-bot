@@ -279,8 +279,8 @@ async def _reject(ctx, reason, *, refund_cooldown=False):
 @bot.command(name="helpblitzbot")
 async def help_blitz_bot(ctx):
     await ctx.send(
-        "**PlayMoreBlitz bot** - still being built.\n"
-        f"`{USAGE['add']}`\n"
+        "**PlayMoreBlitz bot** - counts each member's rated blitz games this month.\n"
+        f"`{USAGE['add']}` - register your own account, one per site (admins can add others)\n"
         "`!remove <username> [site]` - takes a player off the list (whoever added them, or an admin)\n"
         "`!results` - this month so far for everyone on the list (refreshed every "
         f"{REFRESH_INTERVAL_MINUTES} minutes)\n"
@@ -288,8 +288,12 @@ async def help_blitz_bot(ctx):
         "`!100gobnext [username]` - sign up for next month's challenge\n"
         "`!mystats [username]` - one player's results and openings this month (yours if no name)\n"
         "`!mystatsfull [username]` - their records and splits by opponent, colour, day and time\n"
-        "More commands are coming."
     )
+
+
+def _one_per_site_message(site, existing=None):
+    have = f" ({existing})" if existing else ""
+    return f"you already have a {site} account on the list{have} - it's one per site. Use `!remove` first, or ask an admin."
 
 
 @bot.command()
@@ -311,6 +315,15 @@ async def add(ctx, username: str, site: str, owner: Optional[discord.User] = Non
         await _reject(ctx, f"{username} is already on the list for {site}", refund_cooldown=True)
         return
 
+    # One account per site each, unless an admin is adding. Checked here so a refusal costs
+    # no calls to the chess sites, and again inside the database write (see LIMIT below).
+    limited = not _is_admin(ctx.author.id)
+    if limited:
+        mine = [p for p in await asyncio.to_thread(store.accounts_of, person.id) if p.site == site]
+        if mine:
+            await _reject(ctx, _one_per_site_message(site, mine[0].username), refund_cooldown=True)
+            return
+
     month = sources.current_month()
     async with ctx.typing():
         async with aiohttp.ClientSession() as session:
@@ -321,9 +334,12 @@ async def add(ctx, username: str, site: str, owner: Optional[discord.User] = Non
                 await _reject(ctx, str(exc), refund_cooldown=True)
                 return
 
-    outcome = await asyncio.to_thread(store.add_player, site, username, person.id, month, start)
+    outcome = await asyncio.to_thread(store.add_player, site, username, person.id, month, start, one_per_site=limited)
     if outcome == store.EXISTS:  # someone added them while we were on the phone to the site
         await _reject(ctx, f"{username} is already on the list for {site}", refund_cooldown=True)
+        return
+    if outcome == store.LIMIT:  # a second add by the same person got in while we were on the phone to the site
+        await _reject(ctx, _one_per_site_message(site), refund_cooldown=True)
         return
     log.info("%s %s on %s for %s (start rating %s)", outcome, username, site, person.id, start)
     _start_refresh(site, username)

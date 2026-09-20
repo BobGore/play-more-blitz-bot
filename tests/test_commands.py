@@ -129,6 +129,80 @@ def test_add_reports_a_failed_name_lookup_and_stores_nothing(site):
     ctx.command.reset_cooldown.assert_called_once()
 
 
+def test_a_member_cannot_register_a_second_account_on_the_same_site(site):
+    run(botmod.add, make_ctx(ALICE), "alice_main", "chess.com")
+    site["calls"].clear()
+    ctx = make_ctx(ALICE)
+    run(botmod.add, ctx, "alice_alt", "chess.com")
+    assert reactions(ctx) == [NO]
+    assert "already have a chess.com account on the list (alice_main)" in said(ctx)[0] and "one per site" in said(ctx)[0]
+    assert store.get_player("chess.com", "alice_alt") is None
+    assert site["calls"] == []  # refused without contacting any chess site
+    ctx.command.reset_cooldown.assert_called_once_with(ctx)  # and it didn't use up the cooldown
+
+
+def test_a_member_can_register_one_account_on_each_site(site):
+    run(botmod.add, make_ctx(ALICE), "alice_cc", "chess.com")
+    ctx = make_ctx(ALICE)
+    run(botmod.add, ctx, "alice_li", "lichess")
+    assert reactions(ctx) == [OK]
+
+
+def test_a_member_can_swap_their_account_by_removing_the_old_one_first(site):
+    run(botmod.add, make_ctx(ALICE), "old_name", "chess.com")
+    run(botmod.remove, make_ctx(ALICE), "old_name")
+    ctx = make_ctx(ALICE)
+    run(botmod.add, ctx, "new_name", "chess.com")
+    assert reactions(ctx) == [OK]
+
+
+def test_one_members_account_does_not_use_up_someone_elses_slot(site):
+    run(botmod.add, make_ctx(ALICE), "alice_cc", "chess.com")
+    ctx = make_ctx(BOB)
+    run(botmod.add, ctx, "bob_cc", "chess.com")
+    assert reactions(ctx) == [OK]
+
+
+def test_admins_are_not_limited_and_can_register_several_accounts(site):
+    run(botmod.add, make_ctx(MATT_ADMIN), "admin_one", "chess.com")
+    ctx = make_ctx(MATT_ADMIN)
+    run(botmod.add, ctx, "admin_two", "chess.com")
+    assert reactions(ctx) == [OK]
+    assert len(store.accounts_of(MATT_ADMIN)) == 2
+
+
+def test_an_admin_can_add_an_account_for_a_member_who_already_has_one_on_that_site(site):
+    run(botmod.add, make_ctx(BOB), "bob_cc", "chess.com")
+    ctx = make_ctx(MATT_ADMIN)
+    run(botmod.add, ctx, "bobs_second", "chess.com", SimpleNamespace(id=BOB))
+    assert reactions(ctx) == [OK]
+    assert len(store.accounts_of(BOB)) == 2  # the admin's deliberate choice
+
+
+def test_the_same_account_again_says_already_on_the_list_not_the_limit(site):
+    run(botmod.add, make_ctx(ALICE), "alice_cc", "chess.com")
+    ctx = make_ctx(ALICE)
+    run(botmod.add, ctx, "alice_cc", "chess.com")
+    assert "already on the list for chess.com" in said(ctx)[0] and "one per site" not in said(ctx)[0]
+
+
+def test_if_a_second_add_gets_in_during_the_site_lookup_the_database_still_refuses_it(site, monkeypatch):
+    # The quick check passes (the first account isn't there yet), but by the time the write
+    # happens another add by the same person has landed. The database is the last word.
+    real_add = store.add_player
+
+    def racing_add(site_name, username, owner, month, start, **kw):
+        real_add(site_name, "alice_first", owner, month, start)  # the other add lands first
+        return real_add(site_name, username, owner, month, start, **kw)
+
+    monkeypatch.setattr(store, "add_player", racing_add)
+    ctx = make_ctx(ALICE)
+    run(botmod.add, ctx, "alice_second", "chess.com")
+    assert reactions(ctx) == [NO] and "one per site" in said(ctx)[0]
+    assert store.get_player("chess.com", "alice_second") is None
+    ctx.command.reset_cooldown.assert_called_once()
+
+
 def test_add_site_is_case_insensitive(site):
     ctx = make_ctx(ALICE)
     run(botmod.add, ctx, "alice_li", "LiChess")
@@ -219,9 +293,9 @@ def test_someone_else_adding_the_same_player_at_the_same_moment_is_reported_not_
     # Between our "is it already there?" check and the write, another add wins.
     real_add = store.add_player
 
-    def racing_add(site_name, username, owner, month, start):
+    def racing_add(site_name, username, owner, month, start, **kw):
         real_add(site_name, username, BOB, month, start)  # the other add lands first
-        return real_add(site_name, username, owner, month, start)
+        return real_add(site_name, username, owner, month, start, **kw)
 
     monkeypatch.setattr(store, "add_player", racing_add)
     ctx = make_ctx(ALICE)

@@ -12,7 +12,7 @@ list of registered players and each month's totals.
 
 | Command | Who | What it does |
 | --- | --- | --- |
-| `!add <username> <site>` | Anyone (admins can name another owner) | Registers an account. `<site>` is `chess.com` or `lichess`. The name is checked against the site and stored in the site's own spelling. |
+| `!add <username> <site> [@member]` | Anyone for their own account; admins can name another member | Registers an account. `<site>` is `chess.com` or `lichess`. The name is checked against the site and stored in the site's own spelling. One account per site each (admins are exempt). |
 | `!remove <username> [site]` | Whoever added it, or an admin | Takes a player off the list. Their history is kept. |
 | `!results` | Anyone | This month so far for everyone registered: games, record, rating gain, 100GOB progress. |
 | `!100gob [username] [site]` | Whoever added the account, or an admin | Joins this month's 100GOB challenge. |
@@ -21,6 +21,12 @@ list of registered players and each month's totals.
 | `!mystatsfull [username] [site]` (also `!statsfull`) | Anyone | Their records and splits by opponent rating, colour, weekday and time of day. |
 | `!closemonth` | Admins only | Closes any finished month that is still open and posts its final table. Silent for everyone else. |
 | `!helpblitzbot` | Anyone | The command list. |
+
+**House rule: register your own account, one per site.** The bot can't check that an account belongs to whoever
+registers it, so it works on trust and helps keep the rule: a member can have one active account on Chess.com and one
+on Lichess (remove one with `!remove` to swap it). Admins aren't limited, can register an account for someone else
+by naming them (`!add <username> <site> @member`, a mention or their Discord user ID, no other ID needed), and can
+`!remove` anyone's entry, which is how any problem gets settled.
 
 Success is shown with a ✅ reaction and no text; a refusal gets a ❌ and a short reason. Commands are not case
 sensitive, and only work in the channels listed in `ALLOWED_CHANNEL_IDS`. Where a command takes `[username]`

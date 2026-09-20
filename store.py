@@ -15,6 +15,7 @@ DB_LOCK_TIMEOUT = 5.0  # seconds to retry if another thread is mid-write, before
 ADDED = "added"
 REACTIVATED = "reactivated"
 EXISTS = "exists"
+LIMIT = "limit"  # the owner already has a different active account on that site
 
 JOINED = "joined"  # opted in to 100GOB just now
 ALREADY = "already"  # was already in it this month
@@ -306,18 +307,30 @@ def _open_month(conn, site, username, month, start_rating):
     return cur.rowcount == 1
 
 
-def add_player(site, username, owner, month, start_rating):
+def add_player(site, username, owner, month, start_rating, *, one_per_site=False):
     """Register a player, or bring a removed one back, and make sure `month` has a row.
 
-    Returns ADDED, REACTIVATED or EXISTS (already active: nothing changes). A
-    reactivated player belongs to whoever is adding them now. A month row that
-    already exists is left alone, so removing and re-adding within a month keeps
-    that month's totals.
+    Returns ADDED, REACTIVATED, EXISTS (already active: nothing changes) or LIMIT.
+    With `one_per_site`, an owner who already has a different active account on that
+    site gets LIMIT and nothing is written. The check and the write happen under one
+    write lock, so two simultaneous adds by the same owner can't both get through. A
+    reactivated player belongs to whoever is adding them now. A month row that already
+    exists is left alone, so removing and re-adding within a month keeps that month's
+    totals.
     """
     with _transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")  # take the write lock before reading, so the checks below can't go stale
         existing = conn.execute(
             "SELECT active FROM players WHERE site = ? AND username = ?", (site, username)
         ).fetchone()
+        if existing is not None and existing["active"]:
+            return EXISTS
+        # (An active account with this name has already returned EXISTS above, so anything
+        # counted here is a different account of the owner's.)
+        if one_per_site and conn.execute(
+            "SELECT 1 FROM players WHERE added_by = ? AND site = ? AND active = 1", (owner, site)
+        ).fetchone():
+            return LIMIT
 
         if existing is None:
             try:
@@ -325,8 +338,6 @@ def add_player(site, username, owner, month, start_rating):
             except sqlite3.IntegrityError:  # someone else added the same player at the same moment
                 return EXISTS
             outcome = ADDED
-        elif existing["active"]:
-            return EXISTS
         else:
             # username is set too, so a re-add refreshes the spelling; it matches the
             # row case-insensitively either way, so the month rows stay attached.

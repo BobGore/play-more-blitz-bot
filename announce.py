@@ -68,5 +68,5 @@ def signup_call_text(month, target):
         f"**100GOB for {render.month_title(month)}: sign-ups are open**\n"
         f"Play {target} rated blitz games in the month. Join with `!100gobnext` "
         "(add your username if you have more than one account). "
-        "Not on the list yet? Use `!add <username> <site>` first."
+        "Not on the list yet? Use `!add <username> <site>` first (your own account, one per site)."
     )

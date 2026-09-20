@@ -21,6 +21,76 @@ def test_a_new_player_is_added_with_a_month_row():
     assert row["last_game_at"] is None and row["closed_at"] is None
 
 
+def test_one_per_site_refuses_a_second_account_on_the_same_site_and_writes_nothing():
+    assert store.add_player("chess.com", "alice", ALICE, "2026-09", 1500, one_per_site=True) == store.ADDED
+    assert store.add_player("chess.com", "alice_alt", ALICE, "2026-09", 1400, one_per_site=True) == store.LIMIT
+    assert store.get_player("chess.com", "alice_alt") is None
+    assert store.month_row("chess.com", "alice_alt", "2026-09") is None
+
+
+def test_one_per_site_allows_one_account_on_each_site_and_leaves_other_owners_alone():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500, one_per_site=True)
+    assert store.add_player("lichess", "alice_li", ALICE, "2026-09", 1400, one_per_site=True) == store.ADDED
+    assert store.add_player("chess.com", "bobs", BOB, "2026-09", 1300, one_per_site=True) == store.ADDED
+
+
+def test_the_limit_is_not_applied_unless_asked_for_which_is_how_admins_are_exempt():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
+    assert store.add_player("chess.com", "alice_alt", ALICE, "2026-09", 1400) == store.ADDED
+    assert len(store.accounts_of(ALICE)) == 2
+
+
+def test_removing_the_account_frees_the_slot():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500, one_per_site=True)
+    store.remove_player("chess.com", "alice")
+    assert store.add_player("chess.com", "alice_new", ALICE, "2026-09", 1450, one_per_site=True) == store.ADDED
+
+
+def test_bringing_back_a_removed_account_is_refused_if_the_owner_now_has_another_on_that_site():
+    store.add_player("chess.com", "old", ALICE, "2026-09", 1500, one_per_site=True)
+    store.remove_player("chess.com", "old")
+    store.add_player("chess.com", "new", ALICE, "2026-09", 1450, one_per_site=True)
+    assert store.add_player("chess.com", "old", ALICE, "2026-09", 1500, one_per_site=True) == store.LIMIT
+    assert store.get_player("chess.com", "old").active is False
+
+
+def test_an_already_registered_account_reports_exists_not_limit():
+    store.add_player("chess.com", "alice", ALICE, "2026-09", 1500, one_per_site=True)
+    store.add_player("lichess", "alice_li", ALICE, "2026-09", 1400, one_per_site=True)
+    assert store.add_player("chess.com", "alice", ALICE, "2026-09", 1500, one_per_site=True) == store.EXISTS
+
+
+def test_the_limit_compares_names_without_regard_to_case():
+    store.add_player("chess.com", "Alice", ALICE, "2026-09", 1500, one_per_site=True)
+    assert store.add_player("chess.com", "ALICE", ALICE, "2026-09", 1500, one_per_site=True) == store.EXISTS  # the same account
+    assert store.add_player("chess.com", "other", ALICE, "2026-09", 1500, one_per_site=True) == store.LIMIT
+
+
+def test_simultaneous_adds_by_one_owner_cannot_both_get_through(monkeypatch):
+    """Force the worst interleaving: both adds finish checking and reach the write at the same
+    moment. Only the write lock taken at the start keeps the second one from passing its check."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    both_at_the_write = threading.Barrier(2)
+    real_connect = sqlite3.connect
+
+    class Gate(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql.lstrip().startswith("INSERT INTO players"):
+                try:
+                    both_at_the_write.wait(timeout=1.5)  # released if the other add gets here too
+                except threading.BrokenBarrierError:
+                    pass  # the other add is waiting for the write lock, which is the correct behaviour
+            return super().execute(sql, *args)
+
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: real_connect(*a, factory=Gate, **k))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda n: store.add_player("chess.com", n, ALICE, "2026-09", 1500, one_per_site=True), ["acct_a", "acct_b"]))
+    assert sorted(outcomes) == [store.ADDED, store.LIMIT]
+    assert len(store.accounts_of(ALICE)) == 1
+
+
 def test_adding_an_active_player_again_changes_nothing():
     store.add_player("chess.com", "alice", ALICE, "2026-09", 1500)
     assert store.add_player("chess.com", "alice", BOB, "2026-09", 1999) == store.EXISTS

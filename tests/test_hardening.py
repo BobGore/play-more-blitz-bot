@@ -296,7 +296,7 @@ def test_the_readme_gives_the_permission_number_the_code_and_docs_agree_on():
 def test_the_readme_names_no_real_accounts_or_ids_or_secrets():
     assert not re.search(r"\b\d{17,20}\b", README)  # no Discord IDs
     assert not re.search(r"[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,}", README)  # no token-shaped text
-    assert "@" not in README
+    assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", README)  # no email addresses (a bare @member placeholder is fine)
 
 
 def test_the_env_example_names_both_settings_and_holds_no_values():
