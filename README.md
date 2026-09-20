@@ -189,6 +189,7 @@ brings it in.
 | `analysis.py` | The game-analysis maths: accuracy, inaccuracies, mistakes, blunders, average loss (Lichess's published method) |
 | `divider.py` | Where a game's opening, middlegame and endgame start (a translation of the scalachess divider, MIT) |
 | `analysis_queue.py` | The queue of games waiting to be analysed and the results that come back (claiming, limits, giving games back) |
+| `worker_gateway.py` | The one program the analysis worker's SSH key may run: `hello`, `claim N`, `submit`, `release`, JSON in and out |
 | `settings.py` | Every setting, its default, and how `.env` overrides it |
 | `sources.py` | Chess.com and Lichess lookups |
 | `stats.py`, `openings.py` | The numbers and opening grouping, as pure functions |
