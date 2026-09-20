@@ -1,0 +1,14 @@
+[Unit]
+Description=PlayMoreBlitz nightly database backup
+# The backup refuses to run if the folder is missing; this also waits for the disks to be mounted.
+# Change these to match BACKUP_DIR and PLAYMOREBLITZ_DB in .env:
+RequiresMountsFor=/mnt/usbdata /mnt/archive
+
+[Service]
+Type=oneshot
+User=CHANGEME
+WorkingDirectory=/home/CHANGEME/playmoreblitz
+EnvironmentFile=/home/CHANGEME/playmoreblitz/.env
+ExecStart=/home/CHANGEME/playmoreblitz/venv/bin/python backup.py
+NoNewPrivileges=true
+PrivateTmp=true

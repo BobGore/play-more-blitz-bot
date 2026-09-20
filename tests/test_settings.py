@@ -93,5 +93,5 @@ def test_every_setting_is_in_the_readme_and_the_env_example(name):
 
 def test_the_list_of_names_matches_what_settings_py_actually_reads():
     source = (ROOT / "settings.py").read_text(encoding="utf-8")
-    read = set(re.findall(r'(?:whole_number|seconds|discord_ids)\(\s*"([A-Z_]+)"', source)) | {"PLAYMOREBLITZ_DB"}
+    read = set(re.findall(r'(?:whole_number|seconds|discord_ids)\(\s*"([A-Z_]+)"', source)) | {"PLAYMOREBLITZ_DB", "BACKUP_DIR"}
     assert read == set(settings.NAMES)

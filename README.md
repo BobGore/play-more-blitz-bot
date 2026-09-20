@@ -99,6 +99,8 @@ setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at s
 | `MONTH_STALL_SECONDS` | A fetch that goes quiet for this long is abandoned. | 30 |
 | `LICHESS_EXPORT_MIN_INTERVAL` | Seconds between two Lichess game exports. | 2 |
 | `DB_LOCK_TIMEOUT` | Seconds to wait for another database write to finish. | 5 |
+| `BACKUP_DIR` | Folder for the nightly database backups. It must already exist, and should be on a different disk from the database. | `backups` beside the code |
+| `BACKUP_KEEP_DAYS` | Days of nightly backups to keep. | 100 |
 
 At startup the bot logs a warning for anything it can see is wrong, such as a missing `CONTACT` or a post channel
 it can't reach.
@@ -127,9 +129,24 @@ journalctl -u playmoreblitz -f       # the log
 
 ### Backups
 
-Everything the bot keeps is in `playmoreblitz.db`. To back it up, stop the bot and copy the file, or use
-`sqlite3 playmoreblitz.db ".backup backup.db"` while it runs. The file is created on first use and upgraded in
-place when a new version adds to it.
+Everything the bot keeps is in the database file (`playmoreblitz.db` unless `PLAYMOREBLITZ_DB` says otherwise). It is
+created on first use and upgraded in place when a new version adds to it.
+
+`backup.py` makes a dated copy, `playmoreblitz-YYYY-MM-DD.db`, in `BACKUP_DIR` using SQLite's own backup, so it is safe
+while the bot runs. Copies older than `BACKUP_KEEP_DAYS` (100) days are then removed, but only after a good new copy
+exists. The folder must already exist and should be on a different disk from the database; if it is missing (the disk
+isn't mounted) the backup refuses to run rather than fill the wrong disk. To run it every night at 03:30 on a systemd
+machine, edit the paths and user in `playmoreblitz-backup.service`, copy it and `playmoreblitz-backup.timer` to
+`/etc/systemd/system/`, then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now playmoreblitz-backup.timer
+systemctl list-timers playmoreblitz-backup.timer   # when it last ran and runs next
+journalctl -u playmoreblitz-backup                 # what it did, or why it failed
+```
+
+To restore, stop the bot, copy the chosen backup over the database file, and start the bot again.
 
 ### If commands seem to do nothing
 
@@ -162,6 +179,7 @@ The tests need no network and no Discord. A few known-answer tests read real gam
 | File | Purpose |
 | --- | --- |
 | `bot.py` | Commands and the scheduled tasks |
+| `backup.py` | The nightly database backup |
 | `settings.py` | Every setting, its default, and how `.env` overrides it |
 | `sources.py` | Chess.com and Lichess lookups |
 | `stats.py`, `openings.py` | The numbers and opening grouping, as pure functions |

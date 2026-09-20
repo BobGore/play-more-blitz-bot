@@ -100,6 +100,10 @@ LICHESS_EXPORT_MIN_INTERVAL = seconds("LICHESS_EXPORT_MIN_INTERVAL", 2.0, minimu
 # Where the database file lives; by default beside the code. To keep it on a larger disk give a file in
 # a folder that already exists there: the bot refuses to start if that folder is missing.
 DB_PATH = Path(os.environ.get("PLAYMOREBLITZ_DB") or Path(__file__).with_name("playmoreblitz.db"))
+# Nightly backups (backup.py): the folder they go in, which must already exist (it is on another disk from the
+# database, and the backup refuses to run if it is missing), and how many days of them to keep.
+BACKUP_DIR = Path(os.environ.get("BACKUP_DIR") or Path(__file__).with_name("backups"))
+BACKUP_KEEP_DAYS = whole_number("BACKUP_KEEP_DAYS", 100)
 DB_LOCK_TIMEOUT = seconds("DB_LOCK_TIMEOUT", 5.0)  # how long to wait for another write to finish before giving up
 
 # The names above that can be set in `.env` (PLAYMOREBLITZ_DB is the environment name for DB_PATH).
@@ -109,5 +113,5 @@ NAMES = (
     "GOB_TARGET", "REFRESH_INTERVAL_MINUTES", "COOLDOWN_SECONDS", "POST_HOUR_UK", "CALL_DAYS_BEFORE",
     "MIN_OPENING_GAMES", "MIN_BEST_WORST_GAMES", "SIMILAR_RATING_BAND", "STATS_CACHE_PLAYERS",
     "REQUEST_TIMEOUT_SECONDS", "MONTH_TIMEOUT_SECONDS", "MONTH_STALL_SECONDS", "LICHESS_EXPORT_MIN_INTERVAL",
-    "PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT",
+    "PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT", "BACKUP_DIR", "BACKUP_KEEP_DAYS",
 )
