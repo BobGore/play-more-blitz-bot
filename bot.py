@@ -6,12 +6,13 @@ Commands so far: !add, !remove, !results and a help command. The rest come in la
 
 import asyncio
 import contextlib
+import io
 import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import aiohttp
 import discord
@@ -23,6 +24,7 @@ import analysis_feed
 import analysis_queue
 import analysis_reports
 import announce
+import export_data
 import gamecache
 import monthargs
 import monthend
@@ -70,6 +72,7 @@ USAGE = {
     "history": "!history [username] [site]",
     "lastgame": "!lastgame [username] [site]",
     "obit": "!obit [game link or id]",
+    "export": "!export [summary] [period]",
     "setowner": "!setowner <username> <@member> [site]",
 }
 
@@ -247,6 +250,9 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
+DM_COMMANDS = ("obit", "export")  # the commands that work in a direct message to the bot
+
+
 def _in_dm(ctx):
     """True for a direct message to the bot (a message in a server has a guild; a test context with none isn't a DM)."""
     return getattr(ctx, "guild", False) is None
@@ -254,8 +260,8 @@ def _in_dm(ctx):
 
 @bot.check
 async def _in_allowed_channel(ctx):
-    if _in_dm(ctx):  # a direct message: only !obit, which checks for itself that the person is on the server
-        return ctx.command is not None and ctx.command.name == "obit"
+    if _in_dm(ctx):  # a direct message: only the private commands, which check for themselves that the person is on the server
+        return ctx.command is not None and ctx.command.name in DM_COMMANDS
     return ctx.channel.id in ALLOWED_CHANNEL_IDS
 
 
@@ -317,6 +323,9 @@ async def help_blitz_bot(ctx):
         "`/obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), "
         "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Nothing appears in the "
         "channel. Or send me `!obit` in a direct message. Registered members on the server only\n"
+        "`/export [period] [what]` - your own games as a CSV file for a spreadsheet, one file per account, sent by DM; period is "
+        "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or send me `!export` in a direct "
+        "message\n"
     )
 
 
@@ -895,6 +904,12 @@ async def _obit_flow(user_id, channel_id, game, *, typing=None):
     return "error", "I couldn't review that game"
 
 
+def _not_a_member_text(status):
+    """What to say to someone in a DM whom _member_status didn't confirm (False: not a member; None: couldn't tell)."""
+    return ("This is only for members of the server." if status is False
+            else "I couldn't check that you're on the server just now: try again in a moment.")
+
+
 OBIT_HINT = "Use `/obit`, or send me `!obit` in a direct message: reviews are private, so I don't do them in the channel."
 
 
@@ -914,8 +929,7 @@ async def obit_command(ctx, game: Optional[str] = None):
     if status is True:
         kind, text = await _obit_flow(ctx.author.id, ctx.channel.id, game, typing=ctx.typing)
     else:
-        kind, text = "error", ("This is only for members of the server." if status is False
-                               else "I couldn't check that you're on the server just now: try again in a moment.")
+        kind, text = "error", _not_a_member_text(status)
     if kind == "sent":
         await _react(ctx, "✅")  # the review is right here
         return
@@ -937,6 +951,127 @@ async def obit_slash(interaction: discord.Interaction, game: Optional[str] = Non
     await interaction.response.defer(ephemeral=True)  # looking at the chess sites can take longer than Discord waits for a reply
     _, text = await _obit_flow(interaction.user.id, interaction.channel_id, game)
     await interaction.followup.send(text, ephemeral=True)
+
+
+EXPORT_HINT = "Use `/export`, or send me `!export` in a direct message: your data is private, so I don't do it in the channel."
+EXPORT_GAP_SECONDS = 30  # between one person's exports
+_exports = {}  # user id -> when they last had an export (monotonic seconds)
+
+
+async def _export_flow(user_id, what, period_text):
+    """Everything !export and /export do, up to sending. Returns (parts, error): `parts` is a list with one dict per account
+    (the unit is a username on a site) of "text" and, unless that account had no games, "filename" and "data" (the CSV);
+    `error` is text saying why not."""
+    accounts = await asyncio.to_thread(store.accounts_of, user_id)
+    if not accounts:
+        return None, "you haven't added an account yet - use `!add <username> <site>` in the server's channel first"
+    current = sources.current_month()
+    period = export_data.parse_period(period_text, current, time.time())
+    if period is None:
+        return None, f"I don't know the period '{sources.shorten(period_text)}': try `week`, `last`, a month like `2026-08`, or `all`"
+    if period.month and monthargs.is_future(period.month, current):
+        return None, f"{export_data.describe(period)} hasn't happened yet"
+    last = _exports.get(user_id)
+    if last is not None and _monotonic() - last < EXPORT_GAP_SECONDS:
+        return None, "one export at a time please: try again in a few seconds"
+    parts = []
+    for account in accounts:
+        rows = await asyncio.to_thread(export_data.games_for, account.site, account.username, period)
+        label = f"`{account.username}` · {render.SITE_NAMES.get(account.site, account.site)} · {export_data.describe(period)}"
+        if not rows:
+            parts.append({"text": f"{label}: no games held."})
+            continue
+        analysed = sum(1 for r in rows if export_data.has_analysis(r))
+        if what == "summary":
+            data = export_data.summary_csv([export_data.summary_cells(account.site, account.username, period, rows)])
+            text = f"{label}: {len(rows)} games, summarised on one line."
+        else:
+            data = export_data.games_csv(account.site, account.username, rows)
+            text = f"{label}: {len(rows)} games ({analysed} analysed)."
+            counted = await asyncio.to_thread(store.month_row, account.site, account.username, period.month) if period.month else None
+            if counted and counted["games"] > len(rows):
+                text += (f" The bot counted {counted['games']} games that month; the file holds {len(rows)}, because games played "
+                         "before analysis was switched on aren't in it.")
+        if len(data) > export_data.MAX_BYTES:
+            parts.append({"text": f"{label}: too many games for one file: choose a shorter period."})
+            continue
+        parts.append({"text": text, "filename": export_data.file_name(account.site, account.username, period, what), "data": data})
+    if any("data" in p for p in parts):
+        _exports[user_id] = _monotonic()
+    return parts, None
+
+
+async def _dm_parts(user_id, parts):
+    """Send each part to the person privately, with its file if it has one and a Delete button. Raises discord.Forbidden if
+    they don't accept messages from the bot."""
+    user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+    for part in parts:
+        file = discord.File(io.BytesIO(part["data"]), filename=part["filename"]) if "data" in part else None
+        await user.send(part["text"], file=file, view=DeleteButton())
+
+
+def _export_args(first, second):
+    """("summary" or "games", period text or None) from the two optional words after !export, in either order."""
+    words = [w for w in (first, second) if w]
+    what = "summary" if any(w.lower() == "summary" for w in words) else "games"
+    rest = [w for w in words if w.lower() not in ("summary", "games")]
+    return what, (rest[0] if rest else None)
+
+
+@bot.command(name="export")
+async def export_command(ctx, first: Optional[str] = None, second: Optional[str] = None):
+    """Your own games as CSV files for a spreadsheet, one file per account, sent in this conversation. Direct messages only,
+    and only for a registered member who is on the server. `!export [period]`, or `!export summary [period]` for one line per
+    account. The period is this month (the default), `last`, `week` (the last seven days), a month like `2026-08`, or `all`."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(EXPORT_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
+        return
+    status = await _member_status(ctx.author.id)
+    parts, error = (None, _not_a_member_text(status)) if status is not True else await _export_flow(ctx.author.id, *_export_args(first, second))
+    if error is None:
+        try:
+            await _dm_parts(ctx.author.id, parts)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send an export (%s)", exc.status)
+            error = "I couldn't send that just now: try again in a moment"
+    if error is None:
+        await _react(ctx, "✅")
+        return
+    await _react(ctx, "❌")
+    try:
+        await ctx.send(error)
+    except discord.HTTPException as exc:
+        log.warning("couldn't answer a direct message (%s): %s", exc.status, error[:80])
+
+
+@bot.tree.command(name="export", description="Your games as a CSV file for a spreadsheet, sent to you by DM")
+@app_commands.describe(period="This month (the default), last, week (the last 7 days), a month like 2026-08, or all",
+                       what="games: a line per game. summary: one line for the period")
+@app_commands.guild_only()
+async def export_slash(interaction: discord.Interaction, period: Optional[str] = None, what: Literal["games", "summary"] = "games"):
+    """The same as !export, but nothing appears in the channel: the only reply is one only the person asking can see."""
+    if interaction.channel_id not in ALLOWED_CHANNEL_IDS:
+        await interaction.response.send_message("This command only works in the blitz channel.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    parts, error = await _export_flow(interaction.user.id, what, period)
+    if error is None:
+        try:
+            await _dm_parts(interaction.user.id, parts)
+        except discord.Forbidden:
+            error = NO_DM
+        except discord.HTTPException as exc:
+            log.warning("couldn't send an export (%s)", exc.status)
+            error = "I couldn't send that just now: try again in a moment"
+    if error is not None:
+        await interaction.followup.send(error, ephemeral=True)
+        return
+    files = sum(1 for p in parts if "data" in p)
+    await interaction.followup.send(f"I've sent you {files} file{'s' if files != 1 else ''} by DM." if files else "There were no games to send.",
+                                    ephemeral=True)
 
 
 @bot.tree.error
