@@ -18,6 +18,9 @@ ADDED = "added"
 REACTIVATED = "reactivated"
 EXISTS = "exists"
 LIMIT = "limit"  # the owner already has a different active account on that site
+CHANGED = "changed"  # set_owner: the account now belongs to someone else
+UNCHANGED = "unchanged"  # set_owner: it already belonged to them
+MISSING = "missing"  # set_owner: there is no such active account
 
 JOINED = "joined"  # opted in to 100GOB just now
 ALREADY = "already"  # was already in it this month
@@ -439,6 +442,24 @@ def add_player(site, username, owner, month, start_rating, *, one_per_site=False
 
         _open_month(conn, site, username, month, start_rating)
     return outcome
+
+
+def set_owner(site, username, owner, *, one_per_site=False):
+    """Make `owner` (a Discord user ID) the owner of an active player: CHANGED, UNCHANGED (already theirs), MISSING (no
+    such active player) or LIMIT (with `one_per_site`, they already own a different active account on that site). The
+    check and the write happen under one write lock, like add_player's."""
+    with _transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT added_by FROM players WHERE site = ? AND username = ? AND active = 1", (site, username)).fetchone()
+        if row is None:
+            return MISSING
+        if row["added_by"] == owner:
+            return UNCHANGED
+        if one_per_site and conn.execute("SELECT 1 FROM players WHERE added_by = ? AND site = ? AND active = 1 AND username != ?",
+                                         (owner, site, username)).fetchone():
+            return LIMIT
+        conn.execute("UPDATE players SET added_by = ? WHERE site = ? AND username = ?", (owner, site, username))
+    return CHANGED
 
 
 def remove_player(site, username):

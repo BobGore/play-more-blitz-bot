@@ -68,6 +68,7 @@ USAGE = {
     "history": "!history [username] [site]",
     "lastgame": "!lastgame [username] [site]",
     "obit": "!obit [game link or id]",
+    "setowner": "!setowner <username> <@member> [site]",
 }
 
 intents = discord.Intents.default()
@@ -581,6 +582,37 @@ async def mystatsfull(ctx, username: Optional[str] = None, site: Optional[str] =
 
 def _admin_only(ctx):
     return _is_admin(ctx.author.id)
+
+
+@bot.command(name="setowner")
+@commands.check(_admin_only)
+async def setowner(ctx, username: str, member: discord.User, site: Optional[str] = None):
+    """Admin: hand a registered account to the member it belongs to. Accounts an admin registered without naming the
+    member belong to the admin, so `!obit` and `!mystats` with no name would treat them all as the admin's own."""
+    if site is not None:
+        site = site.lower()
+        if site not in sources.SITES:
+            await _reject(ctx, "the site must be `chess.com` or `lichess`")
+            return
+    matches = await asyncio.to_thread(store.find_active, username, site)
+    if not matches:
+        await _reject(ctx, f"'{sources.shorten(username)}' isn't on the list")
+        return
+    if len(matches) > 1:
+        await _reject(ctx, f"{username} is on the list for {' and '.join(m.site for m in matches)} - say which, e.g. "
+                           f"`!setowner {username} @member {matches[0].site}`")
+        return
+    player = matches[0]
+    outcome = await asyncio.to_thread(store.set_owner, player.site, player.username, member.id, one_per_site=not _is_admin(member.id))
+    if outcome == store.LIMIT:
+        await _reject(ctx, f"that member already has a {player.site} account on the list - it's one per site (admins can hold several)")
+    elif outcome == store.UNCHANGED:
+        await _reject(ctx, f"{player.username} already belongs to that member")
+    elif outcome == store.CHANGED:
+        log.info("owner of %s on %s set to %s by %s", player.username, player.site, member.id, ctx.author.id)
+        await _tick(ctx)
+    else:  # removed while we were looking
+        await _reject(ctx, f"{player.username} isn't on the list")
 
 
 @bot.command(name="closemonth")
