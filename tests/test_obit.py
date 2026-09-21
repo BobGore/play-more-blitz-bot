@@ -1241,3 +1241,32 @@ def analysed_now(n):
     q.submit("desk", [{"site": "lichess", "game_id": f"{n:08d}", "method_version": analysis.METHOD_VERSION, "engine": "Stockfish 19", "nodes": 200_000,
                        "plies": 40, "middle_ply": 14, "end_ply": None, "eval_ply20": 10, "evals": curve(0), "white": side(), "black": side(),
                        "moments": moments_for(side(), side())}], NOW + 5)
+
+
+# --- the channel restriction is really registered, and works as Discord runs it ---------------------------------------------------
+
+def passes_the_global_checks(guild, channel_id, command):
+    """Whether a message would get past every check registered on the bot, run the way discord.py runs them."""
+    ctx = SimpleNamespace(guild=guild, channel=SimpleNamespace(id=channel_id), command=SimpleNamespace(name=command) if command else None)
+
+    async def run_all():
+        return all([await discord.utils.maybe_coroutine(check, ctx) for check in botmod.bot._checks])
+    return asyncio.run(run_all())
+
+
+def test_the_channel_restriction_is_the_bots_registered_check():
+    assert botmod._in_allowed_channel in botmod.bot._checks and botmod._in_dm not in botmod.bot._checks
+
+
+def test_commands_in_the_allowed_channel_pass_the_checks_and_other_channels_do_not():
+    server = SimpleNamespace(id=1)
+    assert passes_the_global_checks(server, CHANNEL, "results") is True
+    assert passes_the_global_checks(server, CHANNEL, "obit") is True
+    assert passes_the_global_checks(server, CHANNEL + 1, "results") is False
+    assert passes_the_global_checks(server, CHANNEL + 1, "obit") is False
+
+
+def test_a_direct_message_passes_the_checks_for_obit_only():
+    assert passes_the_global_checks(None, DM_CHANNEL, "obit") is True
+    for command in ("results", "add", "mystats", "closemonth", "helpblitzbot", "analysisq", None):
+        assert passes_the_global_checks(None, DM_CHANNEL, command) is False

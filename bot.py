@@ -247,12 +247,12 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-@bot.check
 def _in_dm(ctx):
     """True for a direct message to the bot (a message in a server has a guild; a test context with none isn't a DM)."""
     return getattr(ctx, "guild", False) is None
 
 
+@bot.check
 async def _in_allowed_channel(ctx):
     if _in_dm(ctx):  # a direct message: only !obit, which checks for itself that the person is on the server
         return ctx.command is not None and ctx.command.name == "obit"
