@@ -119,6 +119,20 @@ CREATE TABLE IF NOT EXISTS obit_requests (
     PRIMARY KEY (user_id, site, game_id)
 );
 
+-- How the bot is used, as counts: per day how many times each command ran, and which Discord IDs were seen (to count people).
+-- Nothing else; anything older than usage.KEEP_DAYS is dropped.
+CREATE TABLE IF NOT EXISTS usage_daily (
+    day  TEXT NOT NULL,                    -- UTC "YYYY-MM-DD"
+    name TEXT NOT NULL,                    -- a command's name, or "error", "obit_sent", "export_sent"
+    n    INTEGER NOT NULL,
+    PRIMARY KEY (day, name)
+);
+CREATE TABLE IF NOT EXISTS usage_seen (
+    day     TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (day, user_id)
+);
+
 -- When each analysis worker last asked for work, so the bot can tell whether one is alive.
 CREATE TABLE IF NOT EXISTS analysis_workers (
     name      TEXT PRIMARY KEY,

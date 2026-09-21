@@ -818,7 +818,7 @@ def test_a_refused_dm_on_the_spot_is_answered_once_by_the_command_not_also_poste
 
 def test_the_delivery_loop_is_started_with_the_bot(monkeypatch):
     started = []
-    for name in ("obit_loop", "refresh_loop", "daily_posts"):
+    for name in ("obit_loop", "refresh_loop", "daily_posts", "health_loop"):
         loop = getattr(botmod, name)
         monkeypatch.setattr(loop, "is_running", lambda: False)
         monkeypatch.setattr(loop, "start", lambda name=name: started.append(name))
@@ -831,7 +831,7 @@ def test_the_delivery_loop_is_started_with_the_bot(monkeypatch):
 
 def test_the_delivery_loop_is_not_started_twice(monkeypatch):
     started = []
-    for name in ("obit_loop", "refresh_loop", "daily_posts"):
+    for name in ("obit_loop", "refresh_loop", "daily_posts", "health_loop"):
         monkeypatch.setattr(getattr(botmod, name), "is_running", lambda: True)
         monkeypatch.setattr(getattr(botmod, name), "start", lambda name=name: started.append(name))
     monkeypatch.setattr(botmod, "sync_slash_commands", AsyncMock())
@@ -896,7 +896,7 @@ def test_a_button_with_no_message_is_refused_and_a_failed_delete_is_survived():
 
 def test_the_delete_button_is_registered_when_the_bot_starts(monkeypatch):
     added = []
-    for name in ("obit_loop", "refresh_loop", "daily_posts"):
+    for name in ("obit_loop", "refresh_loop", "daily_posts", "health_loop"):
         monkeypatch.setattr(getattr(botmod, name), "is_running", lambda: True)
     monkeypatch.setattr(botmod.bot, "add_view", lambda view: added.append(view))
     monkeypatch.setattr(botmod, "sync_slash_commands", AsyncMock())
@@ -1065,7 +1065,7 @@ def test_another_failure_is_logged_and_does_not_stop_the_bot(monkeypatch, caplog
 def test_the_bot_registers_its_slash_commands_when_it_starts(monkeypatch):
     registered = AsyncMock()
     monkeypatch.setattr(botmod, "sync_slash_commands", registered)
-    for name in ("obit_loop", "refresh_loop", "daily_posts"):
+    for name in ("obit_loop", "refresh_loop", "daily_posts", "health_loop"):
         monkeypatch.setattr(getattr(botmod, name), "is_running", lambda: True)
     monkeypatch.setattr(botmod.bot, "add_view", lambda view: None)
     asyncio.run(botmod.on_ready())
@@ -1144,11 +1144,12 @@ def test_a_failure_to_post_the_hint_is_survived(dms, sites):
 
 def test_the_channel_check_lets_a_direct_message_through_for_obit_only():
     async def allowed(guild, channel_id, command):
-        ctx = SimpleNamespace(guild=guild, channel=SimpleNamespace(id=channel_id), command=SimpleNamespace(name=command) if command else None)
+        ctx = SimpleNamespace(guild=guild, channel=SimpleNamespace(id=channel_id), author=SimpleNamespace(id=ALICE),
+                              command=SimpleNamespace(name=command) if command else None)
         return await botmod._in_allowed_channel(ctx)
     assert asyncio.run(allowed(None, DM_CHANNEL, "obit")) is True
     assert asyncio.run(allowed(None, DM_CHANNEL, "results")) is False and asyncio.run(allowed(None, DM_CHANNEL, "add")) is False
-    assert asyncio.run(allowed(None, DM_CHANNEL, "closemonth")) is False and asyncio.run(allowed(None, DM_CHANNEL, None)) is False
+    assert asyncio.run(allowed(None, DM_CHANNEL, "mystatsfull")) is False and asyncio.run(allowed(None, DM_CHANNEL, None)) is False
     assert asyncio.run(allowed(SimpleNamespace(id=1), CHANNEL, "results")) is True                       # a server channel: as before
     assert asyncio.run(allowed(SimpleNamespace(id=1), CHANNEL + 5, "obit")) is False
 
@@ -1247,7 +1248,8 @@ def analysed_now(n):
 
 def passes_the_global_checks(guild, channel_id, command):
     """Whether a message would get past every check registered on the bot, run the way discord.py runs them."""
-    ctx = SimpleNamespace(guild=guild, channel=SimpleNamespace(id=channel_id), command=SimpleNamespace(name=command) if command else None)
+    ctx = SimpleNamespace(guild=guild, channel=SimpleNamespace(id=channel_id), author=SimpleNamespace(id=ALICE),
+                          command=SimpleNamespace(name=command) if command else None)
 
     async def run_all():
         return all([await discord.utils.maybe_coroutine(check, ctx) for check in botmod.bot._checks])
@@ -1268,5 +1270,5 @@ def test_commands_in_the_allowed_channel_pass_the_checks_and_other_channels_do_n
 
 def test_a_direct_message_passes_the_checks_for_obit_only():
     assert passes_the_global_checks(None, DM_CHANNEL, "obit") is True
-    for command in ("results", "add", "mystats", "closemonth", "helpblitzbot", "analysisq", None):
+    for command in ("results", "add", "mystats", "mystatsfull", "helpblitzbot", "remove", None):
         assert passes_the_global_checks(None, DM_CHANNEL, command) is False

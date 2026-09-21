@@ -191,25 +191,34 @@ def in_server(ctx, guild):
     return ctx
 
 
-def test_setowner_refuses_someone_who_is_not_on_the_server_and_changes_nothing():
+def home_server(monkeypatch, guild):
+    """The bot serves `guild`: a channel in it is an allowed channel the bot can see (as in a DM, where the command has no server)."""
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", {1})
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: SimpleNamespace(id=1, guild=guild) if channel_id == 1 else None)
+
+
+def test_setowner_refuses_someone_who_is_not_on_the_server_and_changes_nothing(monkeypatch):
     register("alice_example")
-    ctx = in_server(make_ctx(), guild_with(BOB))
+    home_server(monkeypatch, guild_with(BOB))
+    ctx = make_ctx()
     run(ctx, "alice_example", member(ALICE))
     assert reactions(ctx) == [NO] and said(ctx) == ["that person isn't on this server"] and owner_of("alice_example") == ADMIN
 
 
-def test_setowner_goes_ahead_for_someone_who_is_on_the_server():
+def test_setowner_goes_ahead_for_someone_who_is_on_the_server(monkeypatch):
     register("alice_example")
     guild = guild_with(ALICE)
-    ctx = in_server(make_ctx(), guild)
+    home_server(monkeypatch, guild)
+    ctx = make_ctx()
     run(ctx, "alice_example", member(ALICE))
     assert reactions(ctx) == [OK] and owner_of("alice_example") == ALICE
     guild.fetch_member.assert_awaited_once_with(ALICE)
 
 
-def test_a_failed_lookup_does_not_turn_a_member_away():
+def test_a_failed_lookup_does_not_turn_a_member_away(monkeypatch):
     register("alice_example")
-    ctx = in_server(make_ctx(), guild_with(error=discord.HTTPException(SimpleNamespace(status=500, reason="oops"), "server error")))
+    home_server(monkeypatch, guild_with(error=discord.HTTPException(SimpleNamespace(status=500, reason="oops"), "server error")))
+    ctx = make_ctx()
     run(ctx, "alice_example", member(ALICE))
     assert reactions(ctx) == [OK] and owner_of("alice_example") == ALICE
 

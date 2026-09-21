@@ -38,6 +38,12 @@ def seconds(name, default, minimum=0.1, env=os.environ):
     return _number(name, default, float, minimum, f"a number of seconds, {minimum} or more", env)
 
 
+def text(name, default="", env=os.environ):
+    """A free-text setting, trimmed; the default if it is missing or blank."""
+    raw = env.get(name)
+    return raw.strip() if raw is not None and raw.strip() else default
+
+
 def flag(name, default, env=os.environ):
     """A yes/no setting: 1, true, yes or on; 0, false, no or off, in any capitals."""
     raw = env.get(name)
@@ -81,6 +87,19 @@ ADMIN_USER_IDS = discord_ids("ADMIN_USER_IDS", {
     810486671174795274,  # Bob
     315229727629508609,  # Matt
 })
+
+# Who is sent a private message when something needs attention: an unexpected error, a silent analysis worker, a missing
+# backup, refreshes that keep failing. By default only Bob; add the other admin's ID here once the bot is live.
+ALERT_USER_IDS = discord_ids("ALERT_USER_IDS", {
+    810486671174795274,  # Bob
+})
+
+# An address the bot pings once a minute to say it is alive. A monitoring service (Healthchecks.io has a free one) can then
+# tell you if the pings stop, which is how you hear that the bot itself is down. Empty means no pings. The address is a secret
+# of a sort: keep it in `.env`, not in the code.
+HEARTBEAT_URL = text("HEARTBEAT_URL")
+if HEARTBEAT_URL and not HEARTBEAT_URL.startswith("https://"):
+    _fail("HEARTBEAT_URL", HEARTBEAT_URL, "an address starting with https://")
 
 # --- The challenge and the timing ------------------------------------------------------------------
 
@@ -139,7 +158,7 @@ DB_LOCK_TIMEOUT = seconds("DB_LOCK_TIMEOUT", 5.0)  # how long to wait for anothe
 # The names above that can be set in `.env` (PLAYMOREBLITZ_DB is the environment name for DB_PATH).
 # Tests keep the README and .env.example in step with this list.
 NAMES = (
-    "ALLOWED_CHANNEL_IDS", "POST_CHANNEL_ID", "ADMIN_USER_IDS",
+    "ALLOWED_CHANNEL_IDS", "POST_CHANNEL_ID", "ADMIN_USER_IDS", "ALERT_USER_IDS", "HEARTBEAT_URL",
     "GOB_TARGET", "REFRESH_INTERVAL_MINUTES", "COOLDOWN_SECONDS", "POST_HOUR_UK", "CALL_DAYS_BEFORE",
     "MIN_OPENING_GAMES", "MIN_BEST_WORST_GAMES", "SIMILAR_RATING_BAND", "STATS_CACHE_PLAYERS",
     "REQUEST_TIMEOUT_SECONDS", "MONTH_TIMEOUT_SECONDS", "MONTH_STALL_SECONDS", "LICHESS_EXPORT_MIN_INTERVAL",

@@ -8,6 +8,9 @@ the end of each month, and says well done to everyone who reached 100.
 The bot keeps no score of its own: game counts and ratings always come from the two sites. It stores only the
 list of registered players and each month's totals.
 
+**How it all fits together, how the game analysis works, what the alerts mean and what to do when something breaks:
+see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).**
+
 ## Commands
 
 | Command | Who | What it does |
@@ -22,11 +25,12 @@ list of registered players and each month's totals.
 | `!mystatsfull [username] [site] [month]` (also `!statsfull`) | Anyone | Their records and splits by opponent rating, colour, weekday and time of day. |
 | `!lastgame [username] [site]` | Anyone | The bot's analysis of a player's most recent analysed game, for both sides: result, rating change, inaccuracies, mistakes, blunders, average centipawn loss, accuracy overall and by phase, with a link to the game. Reads only what the bot already holds. Needs game analysis switched on. |
 | `!obit [game link or id]` in a direct message to the bot (also `/obit [game]` in the channel) | Registered members who are on the server, for their own games | A private review of one of your own games by direct message, in Nate Solon's OBIT order: Openings (name, accuracy by phase, the engine's score after 10 moves), Blunders (your worst moments with links to the position before each, on Lichess), Interesting (a lost-on-time flag, a win thrown away or saved, chances your opponent gave you) and a prompt for your Takeaway. No link means your latest game. A Lichess or Chess.com link works, or a bare id. If the game isn't analysed yet it goes to the front of the queue and the review follows by DM. Only games played by an account you registered; the channel only sees a tick. Every DM carries a Delete button, since Discord doesn't let you delete a bot's message in a DM yourself. With no game named it looks on the sites first, so a game played a minute ago counts as the latest (at most once every two minutes per person). `/obit` is a slash command whose only reply is one that just the person asking can see, so nothing appears in the channel. `!obit` works only in a direct message to the bot (a reaction and, if needed, a short reply, all private); in the channel it answers with a hint that removes itself after 20 seconds. In a direct message the bot checks that the person is a member of the server it serves, and refuses if it can't tell. Needs game analysis switched on. |
-| `!analysisq` (also `!analysisqueue`) | Admins only | How the analysis queue stands (waiting, done, skipped, failed), how long the oldest game has waited, and when the worker last asked for work. Silent for everyone else. |
-| `!queuemonth` | Admins only | Puts this month's games so far, for every registered player, in the analysis queue (the refresher only sees games from when analysis was switched on). Can take a few minutes; safe to run again. |
-| `!setowner <username> <@member> [site]` | Admins only | Hands a registered account to the member it belongs to. Accounts an admin registers without naming a member are the admin's own, which makes `!obit` and `!mystats` with no name treat them all as the admin's; this fixes that. Non-admin owners keep to one account per site, and the member must be on the server. |
+| `!analysisq` (also `!analysisqueue`) | Admins only, in a direct message to the bot | How the analysis queue stands (waiting, done, skipped, failed), how long the oldest game has waited, and when the worker last asked for work. Silent for everyone else. |
+| `!queuemonth` | Admins only, in a direct message to the bot | Puts this month's games so far, for every registered player, in the analysis queue (the refresher only sees games from when analysis was switched on). Can take a few minutes; safe to run again. |
+| `!setowner <username> <@member> [site]` | Admins only, in a direct message to the bot | Hands a registered account to the member it belongs to. Accounts an admin registers without naming a member are the admin's own, which makes `!obit` and `!mystats` with no name treat them all as the admin's; this fixes that. Non-admin owners keep to one account per site, and the member must be on the server. |
 | `!export [summary] [period]` in a direct message to the bot (also `/export [period] [what]` in the channel) | Registered members who are on the server, for their own accounts | Your own games as CSV files for a spreadsheet, sent to you by DM: one file per account (a username on a site), one line per game the bot holds, oldest first, analysed or not (the analysis columns are blank until a game is analysed). Columns: when, site, account, link, colour, result, how it ended, time control, opening, ECO, rating before and change, opponent and rating, analysis status, your accuracy overall and by phase, your inaccuracies, mistakes, blunders and centipawn loss, the opponent's, the site's own accuracy, the engine's score after 10 moves, and your worst moments with their move numbers. The period is this month (the default), `last`, `week` (the last seven days), a month like `2026-08`, or `all`. `summary` gives one line per account for the period (games, record, rating start to end, average accuracy, mistakes per game, losses on time) to paste into your own sheet. Games from before analysis was switched on aren't held, and the reply says so when the month's count is higher. Google Sheets can import the file. |
-| `!closemonth` | Admins only | Closes any finished month that is still open and posts its final table. Silent for everyone else. |
+| `!usage [days]` | Admins only, in a direct message to the bot | How the bot has been used over the last 1 to 30 days (7 by default): per day the commands run, the people who used it and the errors, then the most used commands and the reviews and exports sent. Counts only. |
+| `!closemonth` | Admins only, in a direct message to the bot | Closes any finished month that is still open and posts its final table. Silent for everyone else. |
 | `!helpblitzbot` | Anyone | The command list. |
 
 **House rule: register your own account, one per site.** The bot can't check that an account belongs to whoever
@@ -98,6 +102,8 @@ setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at s
 | --- | --- | --- |
 | `ALLOWED_CHANNEL_IDS` | The only channels where commands work, comma separated. Also keeps the bot silent on other servers and in DMs. | the test channel |
 | `POST_CHANNEL_ID` | Where the bot's own posts go (final tables, the sign-up call). Should be one of the allowed channels. | the test channel |
+| `ALERT_USER_IDS` | Who is sent a private message when something needs attention (an unexpected error, a silent analysis worker, a missing backup, failing refreshes), comma separated. | Bob |
+| `HEARTBEAT_URL` | An `https://` address the bot pings once a minute to say it is alive; a monitoring service tells you if the pings stop. Keep it in `.env`. See "Watching over the bot". | none |
 | `ADMIN_USER_IDS` | Who can remove anyone's entry, add for others, and run `!closemonth`, comma separated. | Bob and Matt |
 | `GOB_TARGET` | Games needed for the challenge. | 100 |
 | `REFRESH_INTERVAL_MINUTES` | How often totals refresh. | 30 |
@@ -167,6 +173,30 @@ journalctl -u playmoreblitz-backup                 # what it did, or why it fail
 
 To restore, stop the bot, copy the chosen backup over the database file, and start the bot again.
 
+### Watching over the bot
+
+The bot tells you when something needs attention, by a private message to the people in `ALERT_USER_IDS` (just Bob to
+begin with), headed "⚠ PlayMoreBlitz":
+
+- **An unexpected error** in a command (the command and the kind of error, and nothing about the person). The same
+  error is reported at most every 30 minutes.
+- **The analysis worker has gone quiet:** games are waiting and it hasn't asked for work for 15 minutes (a reboot of
+  the EliteDesk is shorter than that), or it never has.
+- **The backups have stopped:** the newest is two or more days old, or the backup folder is missing or empty.
+- **The refresh has failed throughout** for three cycles in a row (the chess sites can't be reached).
+- **A background job crashed** (the refresh or the sending of reviews).
+
+A problem that lasts is reported again every six hours; when it clears it is forgotten, so if it returns you hear at
+once. `!usage` (in a DM to the bot) shows how the bot is being used: per day the commands run, the people who used it
+and the errors, and the most used commands.
+
+**If the bot itself is down** it can't tell you, so give it something outside to report to. Set `HEARTBEAT_URL` in
+`.env` and the bot pings it once a minute; a monitoring service tells you when the pings stop. With
+[Healthchecks.io](https://healthchecks.io) (free): make a check with a period of 1 minute and a grace time of 10
+minutes (so a restart, which takes seconds, and even a reboot of the Minix never trigger it), add your email or
+another way of being told, copy the check's ping address into `.env` as `HEARTBEAT_URL=https://hc-ping.com/...`, and
+restart the bot. Keep that address private: anyone who has it can send pings.
+
 ### Game analysis (optional)
 
 The bot can have a chess engine analyse the games its players play and keep the figures: accuracy overall and by
@@ -232,7 +262,10 @@ The log says what the bot did with every command. Look for:
 - `ignored: no command called !x`: the bot got it but has no such command.
 - `ignored: !x in channel ... (not an allowed channel ...)`: wrong channel, or an admin-only command.
 - Nothing at all: the message never reached the bot. Check that Message Content Intent is on and saved, and that
-  the bot can see the channel.
+  the bot can see the channel. If the server hides channels from everyone (View Channels switched off for
+  @everyone, for instance to limit a tester to one channel), the bot's own role needs **View Channels** switched on,
+  or a channel permission that allows it in the bot's channel: an invite that didn't ask for View Channels leaves
+  the bot relying on @everyone for it.
 
 ## What it stores
 
@@ -254,6 +287,10 @@ themselves are never stored.
 A `!obit` request is kept only until it is answered: the Discord user ID of whoever asked, the game, their account
 and the channel they asked in, so the review can be sent when the analysis finishes. The review itself is sent by
 direct message and not stored, and a request the bot cannot answer within a day is dropped.
+
+The bot also keeps counts of its own use, for `!usage`: per day, how many times each command ran, and which Discord user
+IDs were seen that day (so that people can be counted). No message text and no game data, and anything older than 35 days is
+dropped. Alerts are messages, not records: nothing about them is kept.
 
 ## Development
 

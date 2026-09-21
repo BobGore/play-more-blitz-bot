@@ -26,6 +26,7 @@ import analysis_reports
 import announce
 import export_data
 import gamecache
+import monitoring
 import monthargs
 import monthend
 import obit
@@ -38,6 +39,7 @@ import singleton
 import sources
 import stats
 import store
+import usage as usage_stats
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("playmoreblitz")
@@ -56,6 +58,7 @@ logging.getLogger("discord.client").addFilter(_NoVoiceWarnings())
 # here because the rest of this file and the tests read them from this module.
 ALLOWED_CHANNEL_IDS = settings.ALLOWED_CHANNEL_IDS  # the only channels commands work in
 ADMIN_USER_IDS = settings.ADMIN_USER_IDS  # can remove anyone's entry, add for others, run !closemonth
+ALERT_USER_IDS = settings.ALERT_USER_IDS  # sent a private message when something needs attention
 COOLDOWN_SECONDS = settings.COOLDOWN_SECONDS  # per user, on commands that call the chess sites
 REFRESH_INTERVAL_MINUTES = settings.REFRESH_INTERVAL_MINUTES  # how often totals are refreshed
 GOB_TARGET = settings.GOB_TARGET  # the 100GOB challenge: games in the month that earn the tick
@@ -73,6 +76,7 @@ USAGE = {
     "lastgame": "!lastgame [username] [site]",
     "obit": "!obit [game link or id]",
     "export": "!export [summary] [period]",
+    "usage": "!usage [days]",
     "setowner": "!setowner <username> <@member> [site]",
 }
 
@@ -106,9 +110,12 @@ async def refresh_loop():
             log.info("month close for %s: %s", result.month, "closed" if result.ok else f"failed for {len(result.failures)} player(s)")
         outcomes = await refresh.refresh_all(sources.current_month())
         log.info("refresh cycle finished: %s", outcomes or "nobody registered")
+        await _track_refresh(outcomes)
         await post_month_end_if_due()
+        await asyncio.to_thread(usage_stats.prune)
     except Exception:  # one bad cycle must not stop the loop
         log.exception("refresh cycle crashed")
+        await _alert_admins("refresh_crash", "a refresh cycle crashed. The log has the details.", monitoring.ERROR_REPEAT_SECONDS)
 
 
 async def post_signup_call_if_due():
@@ -192,6 +199,72 @@ async def daily_posts():
             log.exception("scheduled post %s crashed", post.__name__)
 
 
+_alerts = monitoring.Alerts()
+_health = {"refresh_failures": 0, "heartbeat_failing": False}
+
+
+async def _count(name, user_id=None):
+    """Note a use in the usage counts. Never raises: counting must not break what is being counted."""
+    try:
+        await asyncio.to_thread(usage_stats.count, name, user_id)
+    except Exception:
+        log.exception("couldn't count a use of %s", name)
+
+
+async def _alert_admins(key, text, repeat=monitoring.REPEAT_SECONDS):
+    """Send `text` privately to each of ALERT_USER_IDS, unless the same `key` was reported within `repeat` seconds. Never raises."""
+    if not _alerts.due(key, repeat):
+        return
+    for user_id in ALERT_USER_IDS:
+        try:
+            await _dm(user_id, [f"⚠ PlayMoreBlitz: {text}"])
+        except Exception:
+            log.exception("couldn't send an alert to %s: %s", user_id, text[:100])
+
+
+async def _track_refresh(outcomes):
+    """Note whether a refresh cycle failed throughout, and report it once it has done so several times running."""
+    if monitoring.refresh_failed(outcomes):
+        _health["refresh_failures"] += 1
+    else:
+        _health["refresh_failures"] = 0
+        _alerts.clear("refresh")
+    problem = monitoring.refresh_problem(_health["refresh_failures"])
+    if problem:
+        await _alert_admins("refresh", problem)
+
+
+@tasks.loop(minutes=5)
+async def health_loop():
+    """Every five minutes: is the analysis worker alive while games wait, and are the nightly backups happening? A problem
+    is reported now, and again every few hours while it lasts; when it is over it is forgotten, so a return is reported at once."""
+    try:
+        checks = {"backup": monitoring.backup_problem(settings.BACKUP_DIR)}
+        if settings.ANALYSIS_ENABLED:
+            checks["worker"] = monitoring.worker_problem(await asyncio.to_thread(analysis_queue.status, int(time.time())))
+        for key, problem in checks.items():
+            if problem:
+                await _alert_admins(key, problem)
+            else:
+                _alerts.clear(key)
+    except Exception:
+        log.exception("health check crashed")
+
+
+@tasks.loop(seconds=60)
+async def heartbeat_loop():
+    """Ping HEARTBEAT_URL to say the bot is alive; a monitoring service raises the alarm when the pings stop."""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.get(settings.HEARTBEAT_URL) as response:
+                ok = response.status < 400
+    except Exception:
+        ok = False
+    if not ok and not _health["heartbeat_failing"]:
+        log.warning("the heartbeat ping failed (it is retried every minute)")  # not the address: it is a secret of a sort
+    _health["heartbeat_failing"] = not ok
+
+
 @tasks.loop(seconds=60)
 async def obit_loop():
     """Send the reviews people asked for once their games have been analysed (or say that they can't be)."""
@@ -203,6 +276,7 @@ async def obit_loop():
                 log.exception("could not answer the !obit request for %s %s", request["site"], request["game_id"])
     except Exception:
         log.exception("!obit delivery crashed")
+        await _alert_admins("obit_loop", "sending the reviews people asked for crashed. The log has the details.")
 
 
 _background = set()  # keeps a reference to running tasks so they aren't garbage collected
@@ -242,6 +316,10 @@ async def on_ready():
     await sync_slash_commands()
     if not obit_loop.is_running():
         obit_loop.start()
+    if not health_loop.is_running():
+        health_loop.start()
+    if settings.HEARTBEAT_URL and not heartbeat_loop.is_running():
+        heartbeat_loop.start()
     if not daily_posts.is_running():
         daily_posts.start()
         try:
@@ -250,7 +328,9 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export")  # the commands that work in a direct message to the bot
+DM_COMMANDS = ("obit", "export")  # the private commands members can send the bot in a direct message
+ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage")  # system-type commands: an admin's, and only in a direct message
+ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
 
 def _in_dm(ctx):
@@ -260,8 +340,11 @@ def _in_dm(ctx):
 
 @bot.check
 async def _in_allowed_channel(ctx):
-    if _in_dm(ctx):  # a direct message: only the private commands, which check for themselves that the person is on the server
-        return ctx.command is not None and ctx.command.name in DM_COMMANDS
+    name = getattr(getattr(ctx, "command", None), "name", None)
+    if _in_dm(ctx):  # a direct message: the private commands (which check for themselves that the person is on the server), and an admin's system commands
+        return name in DM_COMMANDS or (name in ADMIN_DM_COMMANDS and _is_admin(ctx.author.id))
+    if name in ADMIN_DM_COMMANDS:  # never in a channel: they would fill it with system talk
+        return False
     return ctx.channel.id in ALLOWED_CHANNEL_IDS
 
 
@@ -618,7 +701,7 @@ async def setowner(ctx, username: str, member: discord.User, site: Optional[str]
         if site not in sources.SITES:
             await _reject(ctx, "the site must be `chess.com` or `lichess`")
             return
-    if not await _on_server(getattr(ctx, "guild", None), member.id):
+    if await _member_status(member.id) is False:  # by the servers the bot serves, since this may be a direct message
         await _reject(ctx, NOT_ON_SERVER)
         return
     matches = await asyncio.to_thread(store.find_active, username, site)
@@ -640,6 +723,14 @@ async def setowner(ctx, username: str, member: discord.User, site: Optional[str]
         await _tick(ctx)
     else:  # removed while we were looking
         await _reject(ctx, f"{player.username} isn't on the list")
+
+
+@bot.command(name="usage")
+@commands.check(_admin_only)
+async def usage_command(ctx, days: int = 7):
+    """Admins only, in a direct message: how the bot has been used over the last few days (1 to 30). Counts only."""
+    days = max(1, min(days, usage_stats.KEEP_DAYS - 5))
+    await ctx.send(usage_stats.render_report(await asyncio.to_thread(usage_stats.report, days)))
 
 
 @bot.command(name="closemonth")
@@ -812,7 +903,10 @@ async def _process_obit(request, *, immediate=False):
         await asyncio.to_thread(obit.add_request, request["user_id"], request["site"], request["game_id"], request["username"],
                                 request["channel_id"], request["requested_at"])
         return "waiting"
-    return "sent" if action == obit.SEND else "closed"
+    if action == obit.SEND:
+        await _count(usage_stats.OBIT_SENT)
+        return "sent"
+    return "closed"
 
 
 NO_DM = ("I couldn't send you a direct message. Allow direct messages from server members "
@@ -948,6 +1042,7 @@ async def obit_slash(interaction: discord.Interaction, game: Optional[str] = Non
     if interaction.channel_id not in ALLOWED_CHANNEL_IDS:
         await interaction.response.send_message("This command only works in the blitz channel.", ephemeral=True)
         return
+    await _count("obit", interaction.user.id)
     await interaction.response.defer(ephemeral=True)  # looking at the chess sites can take longer than Discord waits for a reply
     _, text = await _obit_flow(interaction.user.id, interaction.channel_id, game)
     await interaction.followup.send(text, ephemeral=True)
@@ -1008,6 +1103,7 @@ async def _dm_parts(user_id, parts):
     for part in parts:
         file = discord.File(io.BytesIO(part["data"]), filename=part["filename"]) if "data" in part else None
         await user.send(part["text"], file=file, view=DeleteButton())
+    await _count(usage_stats.EXPORT_SENT)
 
 
 def _export_args(first, second):
@@ -1056,6 +1152,7 @@ async def export_slash(interaction: discord.Interaction, period: Optional[str] =
     if interaction.channel_id not in ALLOWED_CHANNEL_IDS:
         await interaction.response.send_message("This command only works in the blitz channel.", ephemeral=True)
         return
+    await _count("export", interaction.user.id)
     await interaction.response.defer(ephemeral=True)
     parts, error = await _export_flow(interaction.user.id, what, period)
     if error is None:
@@ -1078,6 +1175,10 @@ async def export_slash(interaction: discord.Interaction, period: Optional[str] =
 async def on_app_command_error(interaction, error):
     """A slash command that fails says so privately, never in the channel."""
     log.exception("slash command failed", exc_info=error)
+    name = getattr(getattr(interaction, "command", None), "name", None) or "a slash command"
+    await _count(usage_stats.ERROR)
+    await _alert_admins(f"error:/{name}:{type(getattr(error, 'original', error)).__name__}", monitoring.error_alert(f"/{name}", error),
+                        monitoring.ERROR_REPEAT_SECONDS)
     text = "something went wrong, check the logs"
     try:
         if interaction.response.is_done():
@@ -1193,6 +1294,7 @@ async def history(ctx, username: Optional[str] = None, site: Optional[str] = Non
 @bot.event
 async def on_command(ctx):
     log.info("command !%s from %s in channel %s", ctx.command.qualified_name, ctx.author.id, ctx.channel.id)
+    await _count(ctx.command.qualified_name, ctx.author.id)
 
 
 @bot.event
@@ -1207,8 +1309,18 @@ async def on_command_error(ctx, error):
         log.info("ignored: no command called !%s (channel %s)", ctx.invoked_with, ctx.channel.id)
     elif isinstance(error, commands.CheckFailure):
         log.info("ignored: !%s in channel %s (not an allowed channel, or the command is not permitted)", ctx.invoked_with, ctx.channel.id)
+        if (getattr(ctx.command, "name", None) in ADMIN_DM_COMMANDS and not _in_dm(ctx) and _is_admin(ctx.author.id)
+                and ctx.channel.id in ALLOWED_CHANNEL_IDS):  # an admin who typed a system command in the channel is told where it goes
+            try:
+                await ctx.send(ADMIN_HINT, delete_after=TEXT_STAYS_SECONDS)
+            except discord.HTTPException as exc:
+                log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
     else:
         log.exception("command failed", exc_info=error)
+        name = getattr(ctx.command, "name", None) or "a command"
+        await _count(usage_stats.ERROR)
+        await _alert_admins(f"error:{name}:{type(getattr(error, 'original', error)).__name__}", monitoring.error_alert(f"!{name}", error),
+                            monitoring.ERROR_REPEAT_SECONDS)
         await _reject(ctx, "something went wrong, check the logs")
 
 
