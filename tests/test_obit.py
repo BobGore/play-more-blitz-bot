@@ -299,10 +299,26 @@ def test_the_opening_part_leaves_out_what_it_does_not_know():
     assert "weakest" not in review(even)                                                   # too close to call one
 
 
+def with_moments(row, moments):
+    """`row` with its flagged moves replaced by `moments` ([[ply, "i"|"m"|"b", lost], ...]), as if the analysis had found those."""
+    import json
+    with store.transaction() as conn:
+        conn.execute("UPDATE game_analysis SET moments = ? WHERE site = ? AND game_id = ?", (json.dumps(moments), row["site"], row["game_id"]))
+    return obit.game_row(row["site"], row["game_id"])
+
+
+def section(text, letter):
+    """One part of a review, from its heading to the next: "B" for Blunders, "I" for Interesting."""
+    order = ["**OBIT**", "**O ·", "**B ·", "**I ·", "**T ·"]
+    start = text.index(f"**{letter} ·")
+    later = [text.index(h) for h in order if h in text and text.index(h) > start]
+    return text[start:min(later)] if later else text[start:]
+
+
 def test_the_worst_moments_are_listed_biggest_first_at_most_five_with_links_to_the_position_before():
     row = row_of(1)
     text = review(row)
-    lines = [l for l in text.split("\n") if l.startswith("• ") and "%" in l and "→" in l]
+    lines = [l for l in section(text, "B").split("\n") if l.startswith("• ") and "%" in l and "→" in l]
     assert [l.split("  <")[0] for l in lines] == [
         "• 8. blunder, −25% (+0.1 → +0.1)", "• 6. mistake, −12% (+0.1 → +0.1)", "• 7. mistake, −12% (+0.1 → +0.1)",
         "• 1. inaccuracy, −6% (+0.1 → +0.0)", "• 2. inaccuracy, −6% (+0.0 → +0.0)"]
@@ -313,7 +329,7 @@ def test_the_worst_moments_are_listed_biggest_first_at_most_five_with_links_to_t
 def test_black_sees_only_black_moves_and_black_style_move_numbers():
     row = row_of(1)
     text = review(row, "black", username="rival_example")
-    lines = [l for l in text.split("\n") if l.startswith("• ") and "→" in l]
+    lines = [l for l in section(text, "B").split("\n") if l.startswith("• ") and "→" in l]
     assert [l.split(",")[0] for l in lines] == ["• 11... blunder", "• 12... blunder", "• 8... mistake", "• 9... mistake", "• 10... mistake"]
 
 
@@ -393,7 +409,30 @@ def test_the_clock_story_and_the_curve_stories_are_told_from_blacks_side_too():
 def test_winning_on_time_from_a_worse_position_is_called_out():
     text = review(row_of(1, ending="timeout", result="white", evals=curve(-150)))
     assert "You won on time from a position the engine had at -1.5 for you" in text
-    assert "won on time" not in review(row_of(2, ending="timeout", result="white", evals=curve(50)))
+    assert "won on time" not in review(row_of(2, ending="timeout", result="white", evals=curve(100)))            # a pawn better: the board decided it
+
+
+def test_winning_on_time_in_a_level_position_is_called_out():
+    text = review(row_of(1, ending="timeout", result="white", evals=curve(9)))                                # your own game's shape: +0.1 at the end
+    assert "You won on time in a level position (the engine had it at +0.1 for you): the clock, not the board, decided this one." in text
+    black = review(row_of(2, ending="timeout", result="black", evals=curve(-20)), "black", username="rival_example")
+    assert "You won on time in a level position (the engine had it at +0.2 for you)" in black
+
+
+def test_a_level_position_is_from_45_up_to_55_percent():
+    assert render_obit.LEVEL == 55 and render_obit.NOT_WORSE == 45
+    edge_in = review(row_of(1, ending="timeout", result="white", evals=curve(50)))                              # 54.6%: still level
+    assert "in a level position" in edge_in
+    edge_out = review(row_of(2, ending="timeout", result="white", evals=curve(60)))                             # 55.5%: a little better, no note
+    assert "won on time" not in edge_out
+    lower = review(row_of(3, ending="timeout", result="white", evals=curve(-50)))                               # 45.4%: level at its lower edge
+    assert "in a level position" in lower
+    below = review(row_of(4, ending="timeout", result="white", evals=curve(-60)))                               # 44.5%: worse, the other note
+    assert "from a position the engine had at -0.6 for you: your opponent's clock did the work" in below and "level position" not in below
+
+
+def test_winning_a_level_game_by_resignation_is_not_a_clock_story():
+    assert "level position" not in review(row_of(1, ending="resigned", result="white", evals=curve(9)))
 
 
 def test_a_win_thrown_away_is_called_out_at_its_peak():
@@ -419,7 +458,7 @@ def test_a_lost_position_saved_is_called_out_at_its_low():
 
 def test_the_opponents_mistakes_are_counted_and_the_biggest_named():
     text = review(row_of(1))
-    assert "Your opponent made 5 mistakes or blunders; the biggest, 11..., cost them 25%. Did you see it, and use it?" in text
+    assert "Your opponent made 5 mistakes or blunders; the biggest, 11..., cost them 25% (+0.2 → +0.2). Did you see it, and use it?" in text
     one = side(inaccuracies=0, mistakes=0, blunders=1)
     single = review(row_of(2, black=one, white=side(inaccuracies=0, mistakes=0, blunders=0)))
     assert "Your opponent made 1 mistake or blunder;" in single
@@ -427,11 +466,13 @@ def test_the_opponents_mistakes_are_counted_and_the_biggest_named():
     assert "Your opponent made" not in inaccuracies_only
 
 
-def test_the_most_that_can_stand_out_is_three_and_all_three_are_shown():
+def test_the_most_that_can_stand_out_is_five_and_all_five_are_shown():
+    # lost on time, equal at the end (1); clearly winning earlier (2); the opponent's blunder (4); your own worse one is the turning point (5);
+    # and your reply to their blunder was a slip (6). Test 3 can't hold as well: you lost.
     evals = curve(*([0] * 9), -400, *([0] * 9), 400, 20)
-    text = review(row_of(1, ending="timeout", result="black", evals=evals))
-    section = text.split("**I · Interesting**")[1].split("**T · Takeaway**")[0]
-    assert section.count("• ") == 3
+    row = with_moments(row_of(1, ending="timeout", result="black", evals=evals), [[14, "b", 15.0], [15, "m", 12.0], [21, "b", 30.0]])
+    notes = section(review(row), "I").count("• ")
+    assert notes == 5
 
 
 def test_the_score_is_shown_in_pawns_with_mates_and_the_players_sign():
@@ -1272,3 +1313,92 @@ def test_a_direct_message_passes_the_checks_for_obit_only():
     assert passes_the_global_checks(None, DM_CHANNEL, "obit") is True
     for command in ("results", "add", "mystats", "mystatsfull", "helpblitzbot", "remove", None):
         assert passes_the_global_checks(None, DM_CHANNEL, command) is False
+
+
+# --- the turning point, and a chance given back -------------------------------------------------------------------------------------------------
+
+def notes_of(row, side_="white", username="alice_example"):
+    text = "\n".join(render_obit.render_obit(username, "lichess", row, side_))
+    return [line[2:] for line in section(text, "I").split("\n") if line.startswith("• ")]
+
+
+def test_the_biggest_swing_of_the_game_is_named_when_it_was_your_own_move():
+    evals = curve(*([30] * 10), -120, *([-120] * 10))                                            # ply 11 (yours, White's): +0.3 falls to -1.2
+    row = with_moments(row_of(1, evals=evals), [[11, "b", 22.0], [14, "m", 12.0]])
+    notes = notes_of(row)
+    assert "The biggest swing of the game was your own 6.: it cost you 22% (+0.3 → -1.2)." in notes
+
+
+def test_when_the_biggest_swing_was_the_opponents_it_is_told_as_their_chance_with_the_score_and_not_as_your_own():
+    evals = curve(*([0] * 13), 150, *([150] * 10))                                               # ply 14 is Black's: 0 becomes +1.5 for White
+    row = with_moments(row_of(1, evals=evals), [[14, "b", 25.0], [11, "m", 12.0]])
+    notes = notes_of(row)
+    assert "Your opponent made 1 mistake or blunder; the biggest, 7..., cost them 25% (+0.0 → +1.5). Did you see it, and use it?" in notes
+    assert not any("biggest swing of the game" in n for n in notes)
+
+
+def test_the_swing_is_from_the_players_side_for_black():
+    evals = curve(*([0] * 13), 150, *([150] * 10))                                               # White's ply 13.. no: ply 14 is Black's
+    row = with_moments(row_of(1, evals=evals), [[14, "b", 25.0]])
+    notes = notes_of(row, "black", "rival_example")
+    assert "The biggest swing of the game was your own 7...: it cost you 25% (+0.0 → -1.5)." in notes
+
+
+def test_a_swing_needs_ten_points_and_the_earliest_of_two_equal_ones_counts():
+    small = with_moments(row_of(1, evals=curve(0)), [[11, "i", 9.9]])
+    assert not any("biggest swing" in n for n in notes_of(small))
+    exactly = with_moments(row_of(2, evals=curve(0)), [[11, "m", 10.0]])
+    assert any("biggest swing of the game was your own 6." in n for n in notes_of(exactly))
+    tied = with_moments(row_of(3, evals=curve(0)), [[15, "b", 20.0], [11, "b", 20.0]])
+    assert any("your own 6.: it cost you 20%" in n for n in notes_of(tied))
+    tied_with_theirs = with_moments(row_of(4, evals=curve(0)), [[12, "b", 20.0], [15, "b", 20.0]])                 # theirs (ply 12) came first
+    assert not any("biggest swing" in n for n in notes_of(tied_with_theirs))
+
+
+def test_a_swing_without_scores_is_still_named_just_without_them():
+    row = with_moments(row_of(1), [[11, "b", 22.0]])
+    row["evals"] = None
+    assert "The biggest swing of the game was your own 6.: it cost you 22%." in notes_of(row)
+
+
+def test_a_chance_given_back_names_the_pair():
+    row = with_moments(row_of(1, evals=curve(0)), [[14, "b", 25.0], [15, "m", 12.0]])
+    assert "Your opponent's blunder on 7... (−25%) was answered by your own mistake on 8. (−12%): the chance was given back straight away." in notes_of(row)
+
+
+def test_a_chance_given_back_counts_and_shows_the_costliest_reply():
+    row = with_moments(row_of(1, evals=curve(0)), [[8, "m", 11.0], [9, "i", 6.0], [14, "b", 25.0], [15, "b", 20.0], [22, "m", 12.0], [23, "i", 5.0]])
+    (note,) = [n for n in notes_of(row) if "answered by your own" in n]
+    assert note == ("Your opponent's blunder on 7... (−25%) was answered by your own blunder on 8. (−20%): the chance was given back straight away."
+                    " It happened 3 times.")
+
+
+def test_a_chance_is_not_given_back_when_the_reply_was_fine_or_late_or_the_gift_only_an_inaccuracy():
+    fine = with_moments(row_of(1, evals=curve(0)), [[14, "b", 25.0]])
+    late = with_moments(row_of(2, evals=curve(0)), [[14, "b", 25.0], [17, "m", 12.0]])
+    small = with_moments(row_of(3, evals=curve(0)), [[14, "i", 8.0], [15, "m", 12.0]])
+    for row in (fine, late, small):
+        assert not any("answered by your own" in n for n in notes_of(row))
+
+
+def test_a_chance_given_back_is_told_from_blacks_side_too():
+    row = with_moments(row_of(1, evals=curve(0)), [[13, "b", 25.0], [14, "m", 12.0]])                     # White's blunder, Black's reply
+    assert "Your opponent's blunder on 7. (−25%) was answered by your own mistake on 7... (−12%): the chance was given back straight away." in notes_of(row, "black", "rival_example")
+
+
+def test_none_of_the_moves_of_a_quiet_game_makes_a_note():
+    quiet = side(inaccuracies=0, mistakes=0, blunders=0)
+    text = review(row_of(1, white=quiet, black=quiet, evals=curve(0)))
+    assert "Nothing unusual: a steady game." in text
+
+
+def test_a_swing_on_the_very_last_move_still_shows_the_scores():
+    none = side(inaccuracies=0, mistakes=0, blunders=0)
+    row = with_moments(row_of(1, plies=21, evals=curve(0, plies=21), white=none, black=none), [[21, "b", 22.0]])          # ply 21 is the last stored score
+    assert "The biggest swing of the game was your own 11.: it cost you 22% (+0.0 → +0.0)." in notes_of(row)
+
+
+def test_of_two_chances_given_back_equally_the_earlier_one_is_named():
+    row = with_moments(row_of(1, evals=curve(0)), [[8, "b", 20.0], [9, "i", 8.0], [14, "b", 25.0], [15, "i", 8.0]])
+    (note,) = [n for n in notes_of(row) if "answered by your own" in n]
+    assert note.startswith("Your opponent's blunder on 4... (−20%) was answered by your own inaccuracy on 5. (−8%)") and note.endswith("It happened 2 times.")

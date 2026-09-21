@@ -292,6 +292,73 @@ their latest (`latest_game`, after looking at the sites first if the throttle al
    `/obit` answers only the person asking. Every DM the bot sends carries a **Delete** button (`DeleteButton`, persistent),
    because Discord doesn't let anyone delete a bot's message in a DM themselves.
 
+### The review, element by element (`render_obit.py`)
+
+Nothing in the review is worked out by an engine when it is sent. The worker analysed the game earlier and stored figures in one
+`game_analysis` row; `render_obit.py` only reads that row and words it. The code is commented at every step; this is the map.
+
+**What the row gives it.** `scores`: the engine's evaluation after every ply (a ply is one side's move; ply 1 is White's first
+move, ply 2 Black's first), from White's point of view, in centipawns (100 = a pawn) or a forced mate. `moments`: the moves called
+an inaccuracy, mistake or blunder, as (ply, verdict, points of winning chance lost); odd plies are White's. Plus each side's counts
+and accuracy overall and by phase, the engine's score after 10 moves each (`eval_ply20`), and the game's facts. The review is
+written from one player's side, so scores are flipped for Black.
+
+**Two scales.** Pawns (what the engine says), and *winning chance* in % (`analysis.win_percent`), which is how "how much did that
+cost" and "was I clearly winning" are decided. It is not a straight line:
+
+| Engine score for you | 0.0 | +0.5 | +1.0 | +2.0 | +3.0 | +4.0 | -0.55 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Your winning chance | 50% | 55% | 59% | 68% | 75% | 81% | 45% |
+
+| Part | What it says | Where each piece comes from |
+| --- | --- | --- |
+| Heading | Who, site, date, time control; "You won by timeout as White against …" and a link | The row's usernames, ratings, `ended_at`, `time_control`, `result`, `ending`. |
+| **O**pening | The opening family and ECO; accuracy overall and by phase; the weakest phase; the score after 10 moves each | Name and ECO are the *site's* own (`opening_family` tidies the two sites' spellings). Accuracy is the worker's 0-100 figure for the player's moves (a phase the game never reached shows "-"). "Weakest phase" appears only if two or more phases are known and best and worst are 8+ points apart. "After 10 moves each" is `eval_ply20`, from the player's side. |
+| **B**lunders | Both sides' counts; the player's worst moments | Counts are the row's totals. Each listed moment is one of the player's own flagged moves, biggest loss first (ties: earliest), at most 5: "• 11. inaccuracy, −6% (+0.8 → +0.1)" = move 11, an inaccuracy that gave away 6 points of winning chance, the engine's score going from +0.8 before the move (the score after the ply before it) to +0.1 after it. What the move *was* is not known: moves aren't stored. Lichess lines link to the position *before* the move. |
+| **I**nteresting | Up to five notes, or "Nothing unusual" | Six tests, below. |
+| **T**akeaway | A prompt | Nothing computed: the takeaway is the player's to write (a tick-list is planned). |
+
+**How "Interesting" is decided.** Every test works on the player's winning chance after each ply (`curve`), from the engine's scores. There is
+no clock data, so the clock test is a proxy. (`NOT_WORSE` = 45%, `CLEARLY` = 75%, both at the top of the file.)
+
+1. **The clock** (only if the game ended on time): what the position was worth when the flag fell (the last score). You *lost* on time
+   with a chance of 45% or more (equal or better): "the clock, not the position, decided this one". You *won* on time with under 45%:
+   "your opponent's clock did the work"; or with 45% up to 55% (a **level** position, about -0.55 to +0.5 pawns): "the clock, not the board,
+   decided this one", because winning on time from a level position is unusual. Winning on time when clearly better is not noted.
+2. **A win thrown away**: you didn't win, but at your peak your chance was 75% or more (about +3.0): "you were clearly winning (+4.0 after 10...)
+   and lost", naming the move at the peak.
+3. **A lost position saved**: you didn't lose, but at your low your chance was 25% or less (about -3.0): "you were in real trouble … and won anyway".
+4. **Chances the opponent gave you**: the opponent's flagged moves that are mistakes or blunders (not inaccuracies): how many and the biggest
+   ("cost them 25% (+0.3 → +2.1)": what it did to the engine's score from your side), asking whether you used it.
+5. **The turning point**: the single move that changed the evaluation most, whoever played it, if it cost 10 or more points of winning chance
+   (`TURNING`, a mistake or worse). If it was the opponent's it is already named by test 4, so this note appears only when it was **your own**
+   move: "The biggest swing of the game was your own 11.: it cost you 25% (+1.2 → -1.5)." Two equal swings: the earlier counts.
+6. **A chance given back**: an opponent's mistake or blunder answered on the very next move by one of *your* flagged moves (any size):
+   "Your opponent's blunder on 7... (−25%) was answered by your own mistake on 8. (−12%): the chance was given back straight away."
+   If it happened more than once it names the costliest reply and says how many times.
+
+Tests 2 and 3 can't both hold unless the game was drawn and test 1 needs a decisive result, so at most five notes appear. None holding is a
+normal, steady game. Tests 4 to 6 use only the flagged moves and the evaluation curve, so they need no clock data.
+
+**A real example** (names changed; a 21-ply game White won when Black's flag fell). The stored evaluations after each ply were
+`+20 +16 +18 +35 +29 +33 +34 +42 +4 +1 -6 +26 0 +6 +6 +61 +64 +157 +89 +76 +9` centipawns, and the flagged moves `(16, inaccuracy, 5.0)`,
+`(18, inaccuracy, 8.2)`, `(21, inaccuracy, 6.1)`. The player was White, so odd plies are theirs and the review read:
+
+- *Opening*: the score after ply 20 was +76, so "after 10 moves each the engine had you at +0.8"; opening accuracy 96% against middlegame 77% is 19
+  apart, so "your weakest phase here was the middlegame"; the game never reached an endgame, so that phase is "-".
+- *Blunders*: ply 21 is the player's only flagged move (16 and 18 are Black's): move 11, an inaccuracy, −6% (the stored loss is 6.1 points, shown rounded), score before it
+  +76 (after ply 20) and after it +9: "(+0.8 → +0.1)". Their counts "1 inaccuracy" against the opponent's "2 inaccuracies".
+- *Interesting*, test by test: the game ended on time and the player won, and the last score (+9 cp) is a 51% chance: not under 45%, so not "won
+  from a worse position", but inside the 45-55% band, so the clock test fires: "You won on time in a level position (the engine had it at +0.1
+  for you): the clock, not the board, decided this one." (Before that band was added the review said "steady game" here.) The win chance peaked
+  at 64% (ply 18) and never fell below 49%, so neither 75% nor 25% was reached, and the opponent's two flagged moves were inaccuracies, not
+  mistakes or blunders. One note.
+
+**Limits worth knowing.** It can say where, how big and what it did to the position, never what the move was. "Interesting" is only as good as
+its four tests: an instructive game with no big swing reads as steady. The engine's counts of mistakes differ from Lichess's own (theirs come
+from noisier evaluations), so the figures are described as the bot's own estimate. To change what counts as interesting, edit the four tests
+and the three thresholds (`CLEARLY`, `NOT_WORSE`/`LEVEL`, `TURNING`) in `render_obit._interesting`, and the tests in `tests/test_obit.py` (search "what stands out").
+
 **`!export` / `/export`** — `export_data.py`: one CSV per account (a username on a site), one line per game the bot holds
 for the period (this month, last, week, a month, all), oldest first, analysed or not; or `summary` for one line per account.
 UTF-8 with a BOM (Excel), CRLF, text cells beginning with `= + - @` are defused against spreadsheet formulas. One export
