@@ -76,3 +76,17 @@ def month_summary(site, username, month):
         skipped=len(skipped) - over, failed=status.count(q.FAILED),
         accuracy=average("accuracy"), opening=average("acc_opening"), middlegame=average("acc_middle"), endgame=average("acc_end"),
         acpl=average("acpl"), inaccuracies=average("inaccuracies"), mistakes=average("mistakes"), blunders=average("blunders"))
+
+
+def monthly_accuracy(site, username):
+    """{month: (games analysed, average accuracy of the player's own side)} for every month with an analysed game."""
+    with store.transaction() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT month, white_username, white_accuracy, black_accuracy FROM game_analysis WHERE site = ? AND status = ? "
+            "AND (white_username = ? OR black_username = ?)", (site, q.DONE, username, username))]
+    by_month = {}
+    for r in rows:
+        own = r["white_accuracy"] if r["white_username"].lower() == username.lower() else r["black_accuracy"]
+        if own is not None:
+            by_month.setdefault(r["month"], []).append(own)
+    return {month: (len(values), sum(values) / len(values)) for month, values in by_month.items()}

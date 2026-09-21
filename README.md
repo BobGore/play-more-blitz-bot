@@ -12,13 +12,14 @@ list of registered players and each month's totals.
 
 | Command | Who | What it does |
 | --- | --- | --- |
-| `!add <username> <site> [@member]` | Anyone for their own account; admins can name another member | Registers an account. `<site>` is `chess.com` or `lichess`. The name is checked against the site and stored in the site's own spelling. One account per site each (admins are exempt). |
+| `!add <username> <site> [@member]` | Anyone for their own account; admins can name another member | Registers an account. `<site>` is `chess.com` or `lichess`. The name is checked against the site and stored in the site's own spelling. One account per site each (admins are exempt). Counts the month's games so far from registration; earlier months are not filled in. |
 | `!remove <username> [site]` | Whoever added it, or an admin | Takes a player off the list. Their history is kept. |
-| `!results` | Anyone | This month so far for everyone registered: games, record, current rating, rating gain, 100GOB progress. |
+| `!results [month]` | Anyone | This month so far for everyone registered: games, record, current rating, rating gain, 100GOB progress. Give a past month (`!results august`, `!results 2026-08`, `!results last`) for its final table. |
+| `!history [username] [site]` | Anyone | One player's months, newest first, one line each: games, record, rating start to end, net, average accuracy, 100GOB. No name means your own account. Reads only what the bot holds. |
 | `!100gob [username] [site]` | Whoever added the account, or an admin | Joins this month's 100GOB challenge. |
 | `!100gobnext [username] [site]` | Whoever added the account, or an admin | Signs up for next month's challenge. |
-| `!mystats [username] [site]` (also `!stats`) | Anyone | One player's results, opening tables and best and worst opening, and, when their games have been analysed, an analysis block (accuracy by phase, average centipawn loss, mistakes per game). No name means your own account. |
-| `!mystatsfull [username] [site]` (also `!statsfull`) | Anyone | Their records and splits by opponent rating, colour, weekday and time of day. |
+| `!mystats [username] [site] [month]` (also `!stats`) | Anyone | One player's results, opening tables and best and worst opening, and, when their games have been analysed, an analysis block (accuracy by phase, average centipawn loss, mistakes per game). No name means your own account. |
+| `!mystatsfull [username] [site] [month]` (also `!statsfull`) | Anyone | Their records and splits by opponent rating, colour, weekday and time of day. |
 | `!lastgame [username] [site]` | Anyone | The bot's analysis of a player's most recent analysed game, for both sides: result, rating change, inaccuracies, mistakes, blunders, average centipawn loss, accuracy overall and by phase, with a link to the game. Reads only what the bot already holds. Needs game analysis switched on. |
 | `!analysisq` (also `!analysisqueue`) | Admins only | How the analysis queue stands (waiting, done, skipped, failed), how long the oldest game has waited, and when the worker last asked for work. Silent for everyone else. |
 | `!queuemonth` | Admins only | Puts this month's games so far, for every registered player, in the analysis queue (the refresher only sees games from when analysis was switched on). Can take a few minutes; safe to run again. |
@@ -37,6 +38,9 @@ and you have more than one account, the bot lists them and asks which.
 
 ## How it works
 
+- **History begins at registration.** A player's first month is the month they register, counted from the 1st, and earlier
+  months are never filled in. Every month after that is kept, unchanged once closed, so `!results`, `!history` and
+  `!mystats` can look back at any month held. Asking for a month with no data says when the bot's records begin.
 - **Only rated, standard-chess blitz games count.** Bughouse and other variants are excluded.
 - **Months are UTC calendar months**, matching how Chess.com cuts its archives. In summer that means a month
   rolls over at 01:00 UK time.

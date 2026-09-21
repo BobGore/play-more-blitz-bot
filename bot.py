@@ -21,6 +21,7 @@ import analysis_queue
 import analysis_reports
 import announce
 import gamecache
+import monthargs
 import monthend
 import refresh
 import render
@@ -58,8 +59,10 @@ USAGE = {
     "remove": "!remove <username> [site]",
     "100gob": "!100gob [username] [site]",
     "100gobnext": "!100gobnext [username] [site]",
-    "mystats": "!mystats [username] [site]",
-    "mystatsfull": "!mystatsfull [username] [site]",
+    "results": "!results [month]",
+    "mystats": "!mystats [username] [site] [month]",
+    "mystatsfull": "!mystatsfull [username] [site] [month]",
+    "history": "!history [username] [site]",
     "lastgame": "!lastgame [username] [site]",
 }
 
@@ -269,14 +272,16 @@ async def _reject(ctx, reason, *, refund_cooldown=False):
 async def help_blitz_bot(ctx):
     await ctx.send(
         "**PlayMoreBlitz bot** - counts each member's rated blitz games this month.\n"
-        f"`{USAGE['add']}` - register your own account, one per site (admins can add others)\n"
+        f"`{USAGE['add']}` - register your own account, one per site (admins can add others). "
+        "It counts this month's games so far; earlier months aren't counted\n"
         "`!remove <username> [site]` - takes a player off the list (whoever added them, or an admin)\n"
-        "`!results` - this month so far for everyone on the list (refreshed every "
-        f"{REFRESH_INTERVAL_MINUTES} minutes)\n"
+        "`!results [month]` - this month so far for everyone on the list (refreshed every "
+        f"{REFRESH_INTERVAL_MINUTES} minutes), or a past month's final table: `!results august`, `!results last`\n"
         f"`!100gob [username]` - join this month's challenge: {GOB_TARGET} games of blitz\n"
         "`!100gobnext [username]` - sign up for next month's challenge\n"
-        "`!mystats [username]` - one player's results and openings this month (yours if no name)\n"
-        "`!mystatsfull [username]` - their records and splits by opponent, colour, day and time\n"
+        "`!mystats [username] [month]` - one player's results and openings this month, or another month (yours if no name)\n"
+        "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
+        "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB\n"
         "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
     )
 
@@ -445,20 +450,69 @@ async def gob_next(ctx, username: Optional[str] = None, site: Optional[str] = No
     await _join_challenge(ctx, username, site, month, f"for {render.month_title(month)}", "100gobnext")
 
 
-async def _player_stats(ctx, username, site, command, full):
+MONTH_HELP = "try `2026-08`, `august` or `last`"
+
+
+async def _month_or_reject(ctx, text, current, *, refund_cooldown=False):
+    """The "YYYY-MM" month a command's month word means (the current month if there is none), or None after
+    replying with why it can't be used."""
+    if text is None:
+        return current
+    month = monthargs.parse_month(text, current)
+    if month is None:
+        await _reject(ctx, f"I don't know the month '{sources.shorten(text)}': {MONTH_HELP}", refund_cooldown=refund_cooldown)
+        return None
+    if monthargs.is_future(month, current):
+        await _reject(ctx, f"{render.month_title(month)} hasn't happened yet", refund_cooldown=refund_cooldown)
+        return None
+    return month
+
+
+async def _no_data_text(month, whose=None):
+    """What to say when no results are held for `month`: when the bot's records begin, and why not earlier."""
+    if whose:
+        history = await asyncio.to_thread(store.player_history, *whose)
+        if history:
+            first = history[-1]["month"]
+            return (f"{whose[1]} has no results held for {render.month_title(month)}. Their history starts in "
+                    f"{render.month_title(first)}, the month they registered: earlier months aren't filled in.")
+    earliest = await asyncio.to_thread(store.earliest_month)
+    if earliest is None:
+        return "Nothing has been recorded yet."
+    return (f"There are no results held for {render.month_title(month)}. The bot started counting in {render.month_title(earliest)}: "
+            "a player's history begins in the month they register, and earlier months aren't filled in.")
+
+
+async def _player_stats(ctx, username, site, command, full, month_text=None):
     """Shared by !mystats and !mystatsfull: one player's month, from their games.
 
     Unlike !results this calls the chess sites, though only for games not already
-    held (see gamecache), which is why both commands carry the cooldown.
+    held (see gamecache), which is why both commands carry the cooldown. The month is
+    the current one unless a month is given, as a fourth word or in place of the site
+    ("!mystats alice last") or of the name ("!mystats last", when no registered player
+    has that word as a name).
     """
+    current = sources.current_month()
+    if month_text is None and site is not None and site.lower() not in sources.SITES and monthargs.parse_month(site, current):
+        month_text, site = site, None
+    if month_text is None and username is not None and site is None and monthargs.parse_month(username, current):
+        if not await asyncio.to_thread(store.find_active, username):
+            month_text, username = username, None
+
     player = await _pick_player(ctx, username, site, command, refund_cooldown=True)
     if player is None:
         return
+    month = await _month_or_reject(ctx, month_text, current, refund_cooldown=True)
+    if month is None:
+        return
 
-    month = sources.current_month()
     row = await asyncio.to_thread(store.month_row, player.site, player.username, month)
     if row is None:
-        await _reject(ctx, f"{player.username} has no results for {render.month_title(month)} yet - try again shortly", refund_cooldown=True)
+        if month == current:
+            text = f"{player.username} has no results for {render.month_title(month)} yet - try again shortly"
+        else:
+            text = await _no_data_text(month, (player.site, player.username))
+        await _reject(ctx, text, refund_cooldown=True)
         return
 
     async with ctx.typing():
@@ -480,27 +534,28 @@ async def _player_stats(ctx, username, site, command, full):
     start = row["start_rating"]
     summary = stats.summarise(games, start)
     if full:
-        messages = render.render_mystatsfull(player.username, player.site, month, summary, stats.records(games), stats.splits(games, start))
+        messages = render.render_mystatsfull(player.username, player.site, month, summary, stats.records(games), stats.splits(games, start),
+                                             so_far=month == current)
     else:
         tables = stats.opening_tables(games)
         messages = render.render_mystats(player.username, player.site, month, summary, tables, stats.opening_verdicts(tables),
-                                         analysis_text=analysis_text)
+                                         analysis_text=analysis_text, so_far=month == current)
     for message in messages:
         await ctx.send(message)
 
 
 @bot.command(name="mystats", aliases=["stats"])
 @commands.dynamic_cooldown(_cooldown_for, commands.BucketType.user)
-async def mystats(ctx, username: Optional[str] = None, site: Optional[str] = None):
-    """Results and openings for one player this month: your own account, or any registered player by name."""
-    await _player_stats(ctx, username, site, "mystats", full=False)
+async def mystats(ctx, username: Optional[str] = None, site: Optional[str] = None, month: Optional[str] = None):
+    """Results and openings for one player this month, or another month: your own account, or any registered player."""
+    await _player_stats(ctx, username, site, "mystats", full=False, month_text=month)
 
 
 @bot.command(name="mystatsfull", aliases=["statsfull"])
 @commands.dynamic_cooldown(_cooldown_for, commands.BucketType.user)
-async def mystatsfull(ctx, username: Optional[str] = None, site: Optional[str] = None):
+async def mystatsfull(ctx, username: Optional[str] = None, site: Optional[str] = None, month: Optional[str] = None):
     """Records and the splits by opponent rating, colour, weekday and time of day."""
-    await _player_stats(ctx, username, site, "mystatsfull", full=True)
+    await _player_stats(ctx, username, site, "mystatsfull", full=True, month_text=month)
 
 
 def _admin_only(ctx):
@@ -608,12 +663,43 @@ async def queuemonth(ctx):
 
 
 @bot.command()
-async def results(ctx):
-    """This month so far, from the stored totals. Makes no calls to the chess sites."""
-    month = sources.current_month()
-    rows = await asyncio.to_thread(store.results, month)
-    signed_up = await asyncio.to_thread(store.signups, sources.next_month(month))
-    for message in render.render_results(rows, month, datetime.now(timezone.utc), GOB_TARGET, signed_up):
+async def results(ctx, month: Optional[str] = None):
+    """This month so far, or a past month's final table, from the stored totals. Makes no calls to the chess sites."""
+    current = sources.current_month()
+    chosen = await _month_or_reject(ctx, month, current)
+    if chosen is None:
+        return
+    now = datetime.now(timezone.utc)
+    if chosen == current:
+        rows = await asyncio.to_thread(store.results, chosen)
+        signed_up = await asyncio.to_thread(store.signups, sources.next_month(chosen))
+        messages = render.render_results(rows, chosen, now, GOB_TARGET, signed_up)
+    else:
+        rows = await asyncio.to_thread(store.results, chosen, True)  # only the players who were in that month
+        if not rows:
+            await ctx.send(await _no_data_text(chosen))
+            return
+        messages = render.render_results(rows, chosen, now, GOB_TARGET, final=True)
+    for message in messages:
+        await ctx.send(message)
+
+
+@bot.command(name="history")
+async def history(ctx, username: Optional[str] = None, site: Optional[str] = None):
+    """A player's months one line each, newest first. Reads only what the bot holds, so no calls to the chess sites."""
+    player = await _pick_player(ctx, username, site, "history")
+    if player is None:
+        return
+    rows = await asyncio.to_thread(store.player_history, player.site, player.username)
+    if not rows:
+        await ctx.send(await _no_data_text(sources.current_month(), (player.site, player.username)))
+        return
+    try:
+        accuracy = await asyncio.to_thread(analysis_reports.monthly_accuracy, player.site, player.username)
+    except Exception:  # the accuracy column is a bonus
+        log.exception("could not read the accuracy history for %s on %s", player.username, player.site)
+        accuracy = {}
+    for message in render.render_history(player.username, player.site, rows, GOB_TARGET, accuracy, current=sources.current_month()):
         await ctx.send(message)
 
 

@@ -494,6 +494,22 @@ def record_refresh_error(site, username, month, message):
         )
 
 
+def earliest_month():
+    """The earliest month anyone has results for, or None if nothing has been recorded yet."""
+    with _transaction() as conn:
+        return conn.execute("SELECT MIN(month) AS month FROM monthly_results").fetchone()["month"]
+
+
+def player_history(site, username):
+    """A player's monthly results, newest first, as dicts (month, start_rating, end_rating, games, wins, draws,
+    losses, in_100gob, closed_at). Only months the player has a row for: their first is the month they registered."""
+    with _transaction() as conn:
+        rows = conn.execute(
+            "SELECT month, start_rating, end_rating, games, wins, draws, losses, in_100gob, closed_at FROM monthly_results "
+            "WHERE site = ? AND username = ? ORDER BY month DESC", (site, username)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def month_row(site, username, month):
     """The monthly_results row as a dict, or None."""
     with _transaction() as conn:

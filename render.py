@@ -230,8 +230,9 @@ def _pack(parts):
     return messages
 
 
-def _player_title(username, site, month, full):
-    return f"`{username}` · {SITE_NAMES.get(site, site)} · {month_title(month)} so far" + (" · full" if full else "")
+def _player_title(username, site, month, full, so_far=True):
+    """The heading of a player's summary; a finished month isn't "so far"."""
+    return f"`{username}` · {SITE_NAMES.get(site, site)} · {month_title(month)}" + (" so far" if so_far else "") + (" · full" if full else "")
 
 
 def verdict_line(v):
@@ -248,17 +249,17 @@ def verdict_line(v):
     )
 
 
-def render_mystats(username, site, month, results, openings, verdicts=None, analysis_text=None):
+def render_mystats(username, site, month, results, openings, verdicts=None, analysis_text=None, so_far=True):
     """The default summary: the results block, then opening tables as White and Black.
 
     `verdicts` (stats.opening_verdicts) adds a best and worst opening line under each table, and `analysis_text`
     (render_analysis.mystats_part) is put in after the results block.
     """
-    parts = [f"{_player_title(username, site, month, False)}\n```\n{results_block(results)}\n```"]
+    parts = [f"{_player_title(username, site, month, False, so_far)}\n```\n{results_block(results)}\n```"]
     if analysis_text:
         parts.append(analysis_text)
     if results.games == 0:
-        parts.append("No rated blitz games yet this month.")
+        parts.append("No rated blitz games yet this month." if so_far else "No rated blitz games that month.")
         return _pack(parts)
     for colour, title in (("white", "As White"), ("black", "As Black")):
         rows = openings[colour]
@@ -290,11 +291,11 @@ def records_block(rec):
     )
 
 
-def render_mystatsfull(username, site, month, results, records, splits):
+def render_mystatsfull(username, site, month, results, records, splits, so_far=True):
     """The full summary: records, then the splits by opponent rating, colour, weekday and time of day."""
-    parts = [f"{_player_title(username, site, month, True)}\n```\n{records_block(records)}\n```"]
+    parts = [f"{_player_title(username, site, month, True, so_far)}\n```\n{records_block(records)}\n```"]
     if results.games == 0:
-        parts.append("No rated blitz games yet this month.")
+        parts.append("No rated blitz games yet this month." if so_far else "No rated blitz games that month.")
         return _pack(parts)
     for title, rows, header, labels in (
         ("By opponent rating", splits.by_opponent_rating, "Opponent", OPPONENT_LABELS),
@@ -353,3 +354,47 @@ def _fit(text):
 
 
 fit = _fit  # for callers outside this module that need to cut a long text into messages
+
+
+# --- history: !history ------------------------------------------------------------------------------------------------
+
+
+def _short_month(month):
+    return datetime.strptime(month, "%Y-%m").strftime("%b %Y")
+
+
+def render_history(username, site, rows, target, accuracy=None, current=None):
+    """A player's months, newest first, one line each. `rows` is store.player_history, `accuracy` is
+    analysis_reports.monthly_accuracy, and `current` the present month, which is marked as still open."""
+    accuracy = accuracy or {}
+    title = f"`{username}` · {SITE_NAMES.get(site, site)} · month by month"
+    if not rows:
+        return [f"{title}\nNo months held yet."]
+    labels = [_short_month(r["month"]) + ("*" if r["month"] == current else "") for r in rows]
+    games = [str(r["games"]) for r in rows]
+    record = [f"{r['wins']}-{r['draws']}-{r['losses']}" for r in rows]
+    rating = [f"{r['start_rating']}→{r['end_rating']}" for r in rows]
+    net = [_signed(r["end_rating"] - r["start_rating"]) for r in rows]
+    acc = [_pct_whole(accuracy[r["month"]][1]) if r["month"] in accuracy else "-" for r in rows]
+    challenge = []
+    for r in rows:
+        if not r["in_100gob"]:
+            challenge.append("")
+        else:
+            challenge.append("✅" if r["games"] >= target else f"{r['games']}/{target}")
+    widths = [max(len(head), *map(len, column)) for head, column in
+              (("Month", labels), ("Gm", games), ("W-D-L", record), ("Rating", rating), ("Net", net), ("Acc", acc))]
+    header = (f"{'Month':<{widths[0]}}  {'Gm':>{widths[1]}}  {'W-D-L':>{widths[2]}}  {'Rating':>{widths[3]}}  "
+              f"{'Net':>{widths[4]}}  {'Acc':>{widths[5]}}  100GOB")
+    lines = [header]
+    for i in range(len(rows)):
+        lines.append((f"{labels[i]:<{widths[0]}}  {games[i]:>{widths[1]}}  {record[i]:>{widths[2]}}  {rating[i]:>{widths[3]}}  "
+                      f"{net[i]:>{widths[4]}}  {acc[i]:>{widths[5]}}  {challenge[i]}").rstrip())
+    note = "\n* still open: the month so far" if any(r["month"] == current for r in rows) else ""
+    parts = _table_parts(title, lines)
+    parts[-1] += note
+    return _pack(parts)
+
+
+def _pct_whole(score):
+    return f"{int(score + 0.5)}%"

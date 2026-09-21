@@ -873,8 +873,8 @@ def test_an_admin_asking_for_a_missing_player_has_no_cooldown_to_refund(played):
 def test_both_commands_carry_the_cooldown_and_the_error_handler_knows_their_usage():
     for command in (botmod.mystats, botmod.mystatsfull):
         assert command._buckets.valid  # a cooldown is attached
-    assert botmod.USAGE["mystats"] == "!mystats [username] [site]"
-    assert botmod.USAGE["mystatsfull"] == "!mystatsfull [username] [site]"
+    assert botmod.USAGE["mystats"] == "!mystats [username] [site] [month]"
+    assert botmod.USAGE["mystatsfull"] == "!mystatsfull [username] [site] [month]"
 
 
 def test_the_help_message_lists_every_command_and_fits_in_one_discord_message():

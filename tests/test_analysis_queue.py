@@ -255,8 +255,10 @@ def test_two_workers_never_get_the_same_game():
     register("alice_example")
     q.queue_games([game(n) for n in range(1, 61)], NOW)
     got = {"a": [], "b": []}
+    start = threading.Barrier(2)
 
     def work(name):
+        start.wait()
         for _ in range(20):
             got[name] += [g["game_id"] for g in q.claim(name, 3, NOW)]
 
@@ -264,7 +266,7 @@ def test_two_workers_never_get_the_same_game():
     [t.start() for t in threads]
     [t.join() for t in threads]
     everything = got["a"] + got["b"]
-    assert len(everything) == len(set(everything)) == 60 and got["a"] and got["b"]
+    assert len(everything) == len(set(everything)) == 60   # none handed out twice, none missed (how they split it is up to the scheduler)
 
 
 def test_asking_for_work_is_noted_even_when_there_is_none():
