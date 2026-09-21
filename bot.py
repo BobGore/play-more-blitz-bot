@@ -5,6 +5,7 @@ Commands so far: !add, !remove, !results and a help command. The rest come in la
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -14,6 +15,7 @@ from typing import Optional
 
 import aiohttp
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 import analysis
@@ -234,6 +236,7 @@ async def on_ready():
     if not refresh_loop.is_running():  # on_ready can fire again after a reconnect
         refresh_loop.start()
     bot.add_view(DeleteButton())  # so the Delete button on a DM sent before a restart still works
+    await sync_slash_commands()
     if not obit_loop.is_running():
         obit_loop.start()
     if not daily_posts.is_running():
@@ -304,8 +307,9 @@ async def help_blitz_bot(ctx):
         "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
         "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB\n"
         "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
-        "`!obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), sent "
-        "by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue\n"
+        "`/obit [game link or id]` (or `!obit`) - a private review of one of your own games (Openings, Blunders, Interesting, "
+        "Takeaway), sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. `/obit` leaves "
+        "nothing in the channel\n"
     )
 
 
@@ -781,66 +785,151 @@ async def _say_no_dm(channel_id, user_id):
             log.warning("couldn't tell %s in channel %s that their DMs are closed (%s)", user_id, channel_id, exc.status)
 
 
-@bot.command(name="obit")
-@commands.dynamic_cooldown(_cooldown_for, commands.BucketType.user)
-async def obit_command(ctx, game: Optional[str] = None):
-    """A private review of one of your own games, sent by DM. No link or id means your latest game. If the game hasn't
-    been analysed yet it goes to the front of the queue and the review follows when it's done."""
+_lookups = {}  # user id -> when we last looked on the sites for their games (monotonic seconds)
+LOOKUP_GAP_SECONDS = 120  # how often one person can make the bot look on the sites for their new games
+_monotonic = time.monotonic
+TEXT_STAYS_SECONDS = 20  # how long the bot's error text to a quiet !obit stays in the channel
+
+
+async def _obit_flow(user_id, channel_id, game, *, typing=None):
+    """Everything !obit and /obit do, up to what to tell the person. Returns (kind, text): "sent" (the review is in their
+    DMs), "waiting" (queued: it will follow), "no_dm" (they don't accept DMs from the bot) or "error" (text says why).
+
+    `typing` is a function giving an async context manager to show while the chess sites are looked at. With no game named
+    the sites are looked at first, so a game played a minute ago is the latest one; with a game named, only if it isn't held.
+    Either way one person makes the bot look at most once every LOOKUP_GAP_SECONDS."""
     if not settings.ANALYSIS_ENABLED:
-        await _reject(ctx, "game analysis isn't switched on yet", refund_cooldown=True)
-        return
-    accounts = await asyncio.to_thread(store.accounts_of, ctx.author.id)
+        return "error", "game analysis isn't switched on yet"
+    accounts = await asyncio.to_thread(store.accounts_of, user_id)
     if not accounts:
-        await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` first", refund_cooldown=True)
-        return
+        return "error", "you haven't added an account yet - use `!add <username> <site>` first"
     refs = None
     if game is not None:
         refs = obit.candidates(game)
         if not refs:
-            await _reject(ctx, f"I can't read '{sources.shorten(game)}' as a game: give a Lichess or Chess.com game link, or the game's id",
-                          refund_cooldown=True)
-            return
+            return "error", f"I can't read '{sources.shorten(game)}' as a game: give a Lichess or Chess.com game link, or the game's id"
 
     def look():
         return obit.find_game(accounts, refs) if refs else obit.latest_game(accounts)
 
-    found = await asyncio.to_thread(look)
-    if found is None:  # a game played a minute ago may not have been seen yet: look on the sites once, then again
-        async with ctx.typing():
+    def may_look_at_the_sites():
+        last = _lookups.get(user_id)
+        return last is None or _monotonic() - last >= LOOKUP_GAP_SECONDS
+
+    async def look_at_the_sites():
+        _lookups[user_id] = _monotonic()
+        async with (typing() if typing else contextlib.nullcontext()):
             for account in accounts:
                 await refresh.refresh_one(account.site, account.username)
-        found = await asyncio.to_thread(look)
+
+    if refs is None and may_look_at_the_sites():
+        await look_at_the_sites()
+    found = await asyncio.to_thread(look)
+    held_back = False
+    if found is None and refs is not None:
+        if may_look_at_the_sites():
+            await look_at_the_sites()
+            found = await asyncio.to_thread(look)
+        else:
+            held_back = True
     if found is None:
-        await _reject(ctx, "I can't find that among your games. I only hold games played since you registered." if refs
-                      else "I don't hold any games of yours yet.", refund_cooldown=True)
-        return
+        if held_back:
+            return "error", "I looked on the sites for your games a moment ago and that one wasn't there: try again in a couple of minutes"
+        return "error", ("I can't find that among your games. I only hold games played since you registered." if refs
+                         else "I don't hold any games of yours yet.")
     row, account, side = found
     key = (row["site"], row["game_id"])
 
-    if await asyncio.to_thread(obit.waiting_count, ctx.author.id, key) >= obit.MAX_WAITING:
-        await _reject(ctx, f"you already have {obit.MAX_WAITING} reviews waiting: I'll DM them as they finish", refund_cooldown=True)
-        return
+    if await asyncio.to_thread(obit.waiting_count, user_id, key) >= obit.MAX_WAITING:
+        return "error", f"you already have {obit.MAX_WAITING} reviews waiting: I'll DM them as they finish"
     outcome = await asyncio.to_thread(analysis_queue.prioritise, *key)
     if outcome is not None:
         status, reason = outcome
         if status == analysis_queue.SKIPPED:
-            await _reject(ctx, f"I couldn't review that game: {obit.SKIP_WORDS.get(reason, 'it was skipped')}.", refund_cooldown=True)
-            return
+            return "error", f"I couldn't review that game: {obit.SKIP_WORDS.get(reason, 'it was skipped')}."
     now = int(time.time())
-    await asyncio.to_thread(obit.add_request, ctx.author.id, key[0], key[1], account.username, ctx.channel.id, now)
-    request = {"user_id": ctx.author.id, "site": key[0], "game_id": key[1], "username": account.username,
-               "channel_id": ctx.channel.id, "requested_at": now}
+    await asyncio.to_thread(obit.add_request, user_id, key[0], key[1], account.username, channel_id, now)
+    request = {"user_id": user_id, "site": key[0], "game_id": key[1], "username": account.username,
+               "channel_id": channel_id, "requested_at": now}
     result = await _process_obit(request, immediate=True)
     if result == "sent":
-        await _tick(ctx)
-        await ctx.send("I've sent you the review by DM.")
-    elif result == "waiting":
-        await _tick(ctx)
-        await ctx.send("Analysing that game now: it's at the front of the queue. I'll DM you the review when it's done.")
-    elif result == "no_dm":
-        await _reject(ctx, NO_DM)
-    else:
-        await _reject(ctx, "I couldn't review that game")
+        return "sent", "I've sent you the review by DM."
+    if result == "waiting":
+        return "waiting", "Analysing that game now: it's at the front of the queue. I'll DM you the review when it's done."
+    if result == "no_dm":
+        return "no_dm", NO_DM
+    return "error", "I couldn't review that game"
+
+
+@bot.command(name="obit")
+async def obit_command(ctx, game: Optional[str] = None):
+    """A private review of one of your own games, sent by DM. No link or id means your latest game. If the game hasn't
+    been analysed yet it goes to the front of the queue and the review follows when it's done. Quiet: a reaction only
+    (✅ sent, ⏳ on its way), and any error text removes itself soon. `/obit` leaves nothing in the channel at all."""
+    kind, text = await _obit_flow(ctx.author.id, ctx.channel.id, game, typing=ctx.typing)
+    if kind in ("sent", "waiting"):
+        await _react(ctx, "✅" if kind == "sent" else "⏳")
+        return
+    await _react(ctx, "❌")
+    try:
+        await ctx.send(text, delete_after=TEXT_STAYS_SECONDS)
+    except discord.HTTPException as exc:
+        log.warning("couldn't send a reply in channel %s (%s): %s", ctx.channel.id, exc.status, text[:80])
+
+
+@bot.tree.command(name="obit", description="A private review of one of your games, sent to you by DM")
+@app_commands.describe(game="A Lichess or Chess.com game link or id. Leave it out for your latest game.")
+@app_commands.guild_only()
+async def obit_slash(interaction: discord.Interaction, game: Optional[str] = None):
+    """The same as !obit, but nothing appears in the channel: the only reply is one only the person asking can see."""
+    if interaction.channel_id not in ALLOWED_CHANNEL_IDS:
+        await interaction.response.send_message("This command only works in the blitz channel.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)  # looking at the chess sites can take longer than Discord waits for a reply
+    _, text = await _obit_flow(interaction.user.id, interaction.channel_id, game)
+    await interaction.followup.send(text, ephemeral=True)
+
+
+@bot.tree.error
+async def on_app_command_error(interaction, error):
+    """A slash command that fails says so privately, never in the channel."""
+    log.exception("slash command failed", exc_info=error)
+    text = "something went wrong, check the logs"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(text, ephemeral=True)
+        else:
+            await interaction.response.send_message(text, ephemeral=True)
+    except discord.HTTPException as exc:
+        log.warning("couldn't tell someone that a slash command failed (%s)", exc.status)
+
+
+_slash = {"synced": False}
+
+
+async def sync_slash_commands():
+    """Register the slash commands in each server that has an allowed channel (a server's commands appear at once; global
+    ones can take an hour). Needs the bot to have been invited with the applications.commands scope: without it Discord
+    refuses, and the log says how to fix it. Once per run: a reconnect doesn't repeat it."""
+    if _slash["synced"]:
+        return
+    _slash["synced"] = True
+    guilds = {}
+    for channel_id in ALLOWED_CHANNEL_IDS:
+        channel = bot.get_channel(channel_id)
+        guild = getattr(channel, "guild", None)
+        if guild is not None:
+            guilds[guild.id] = guild
+    for guild in guilds.values():
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            log.info("slash commands registered in %s: %s", guild.id, ", ".join(c.name for c in synced) or "none")
+        except discord.Forbidden:
+            log.warning("couldn't register slash commands in %s: invite the bot again with the applications.commands scope "
+                        "(see the README, 'Slash commands')", guild.id)
+        except discord.HTTPException:
+            log.exception("couldn't register slash commands in %s", guild.id)
 
 
 @bot.command(name="analysisq", aliases=["analysisqueue"])

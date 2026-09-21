@@ -27,6 +27,8 @@ CHANNEL = 555
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(settings, "ANALYSIS_ENABLED", True)
+    botmod._lookups.clear()
+    monkeypatch.setitem(botmod._slash, "synced", False)
 
 
 def curve(*cps, plies=40):
@@ -501,12 +503,12 @@ def forbidden():
     return discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Cannot send messages to this user")
 
 
-def test_asking_for_a_game_already_analysed_sends_the_review_by_dm_and_ticks_the_channel(dms, sites):
+def test_asking_for_a_game_already_analysed_sends_the_review_by_dm_and_only_reacts_in_the_channel(dms, sites):
     register("alice_example")
     analysed(spec(1, "alice_example", "rival_example"))
     ctx = make_ctx(ALICE)
     ask(ctx, "https://lichess.org/00000001")
-    assert reactions(ctx) == [OK] and said(ctx) == ["I've sent you the review by DM."]
+    assert reactions(ctx) == [OK] and said(ctx) == []                                     # a reaction and no text: quiet
     assert len(dms) == 1 and dms[0][0] == ALICE and "**OBIT**" in dms[0][1][0] and "<https://lichess.org/00000001>" in "\n".join(dms[0][1])
     assert obit.outstanding() == [] and sites.calls == []                                 # nothing left waiting, and no need to look at the sites
 
@@ -531,7 +533,7 @@ def test_a_game_not_yet_analysed_goes_to_the_front_of_the_queue_and_is_answered_
     q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2, 3)], NOW)
     ctx = make_ctx(ALICE)
     ask(ctx, "00000001")
-    assert reactions(ctx) == [OK] and said(ctx) == ["Analysing that game now: it's at the front of the queue. I'll DM you the review when it's done."]
+    assert reactions(ctx) == ["⏳"] and said(ctx) == []                                     # queued: an hourglass, and the DM follows
     assert dms == [] and [(r["user_id"], r["game_id"], r["username"], r["channel_id"]) for r in obit.outstanding()] == [(ALICE, "00000001", "alice_example", CHANNEL)]
     assert [g["game_id"] for g in q.claim("desk", 1, NOW)] == ["00000001"]                 # ahead of the newer games
 
@@ -555,10 +557,10 @@ def test_a_game_skipped_for_the_monthly_limit_is_queued_anyway(dms, sites):
         conn.execute("UPDATE game_analysis SET status = 'skipped', skip_reason = ?, priority = 1", (q.OVER_MONTHLY_LIMIT,))
     ctx = make_ctx(ALICE)
     ask(ctx, "00000001")
-    assert reactions(ctx) == [OK] and statuses()["00000001"] == (q.PENDING, q.URGENT, None, 0)
+    assert reactions(ctx) == ["⏳"] and statuses()["00000001"] == (q.PENDING, q.URGENT, None, 0)
 
 
-def test_a_game_that_cannot_be_analysed_is_refused_with_the_reason_and_the_cooldown_is_refunded(dms, sites):
+def test_a_game_that_cannot_be_analysed_is_refused_with_the_reason_in_text_that_removes_itself(dms, sites):
     register("alice_example")
     q.queue_games([spec(1, "alice_example", "x_example")], NOW)
     q.claim("desk", 1, NOW)
@@ -566,7 +568,7 @@ def test_a_game_that_cannot_be_analysed_is_refused_with_the_reason_and_the_coold
     ctx = make_ctx(ALICE)
     ask(ctx, "00000001")
     assert reactions(ctx) == [NO] and "chess960" in said(ctx)[0] and obit.outstanding() == [] and dms == []
-    ctx.command.reset_cooldown.assert_called_once_with(ctx)
+    assert ctx.send.await_args.kwargs == {"delete_after": 20}
 
 
 def test_someone_elses_game_is_refused_and_nothing_is_queued_or_sent(dms, sites):
@@ -577,7 +579,6 @@ def test_someone_elses_game_is_refused_and_nothing_is_queued_or_sent(dms, sites)
     ask(ctx, "https://lichess.org/00000001")
     assert reactions(ctx) == [NO] and said(ctx) == ["I can't find that among your games. I only hold games played since you registered."]
     assert statuses()["00000001"][1] == q.NORMAL and obit.outstanding() == [] and dms == []
-    ctx.command.reset_cooldown.assert_called_once_with(ctx)
 
 
 def test_a_game_not_seen_yet_is_looked_for_on_the_sites_once_and_then_answered(dms, sites):
@@ -587,17 +588,52 @@ def test_a_game_not_seen_yet_is_looked_for_on_the_sites_once_and_then_answered(d
     ctx = make_ctx(ALICE)
     ask(ctx)
     assert sites.calls == [("chess.com", "alice_cc"), ("lichess", "alice_example")]                # both accounts, once each
-    assert reactions(ctx) == [OK] and "front of the queue" in said(ctx)[0]
+    assert reactions(ctx) == ["⏳"] and said(ctx) == []
 
 
-def test_when_the_sites_have_nothing_either_it_says_so(dms, sites):
+def test_when_the_sites_have_nothing_either_it_says_so_and_looks_again_only_after_a_couple_of_minutes(dms, sites, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(botmod, "_monotonic", lambda: clock[0])
     register("alice_example")
     ctx = make_ctx(ALICE)
     ask(ctx)
     assert reactions(ctx) == [NO] and said(ctx) == ["I don't hold any games of yours yet."] and len(sites.calls) == 1
     ctx = make_ctx(ALICE)
+    ask(ctx, "00000042")                                                                    # a moment later: not looked for again
+    assert "I looked on the sites for your games a moment ago" in said(ctx)[0] and len(sites.calls) == 1
+    clock[0] += botmod.LOOKUP_GAP_SECONDS - 1
+    ask(make_ctx(ALICE), "00000042")
+    assert len(sites.calls) == 1
+    clock[0] += 1
+    ctx = make_ctx(ALICE)
     ask(ctx, "00000042")
     assert "I can't find that among your games" in said(ctx)[0] and len(sites.calls) == 2
+
+
+def test_with_no_game_named_the_sites_are_looked_at_first_so_a_game_just_played_is_the_latest(dms, sites):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))                                          # analysed long ago
+    sites.effect = lambda: q.queue_games([spec(9, "alice_example", "new_opponent")], NOW) if "00000009" not in statuses() else None
+    ctx = make_ctx(ALICE)
+    ask(ctx)
+    assert sites.calls == [("lichess", "alice_example")] and reactions(ctx) == ["⏳"]
+    assert [r["game_id"] for r in obit.outstanding()] == ["00000009"]                        # the new one, not the analysed old one
+
+
+def test_the_sites_are_looked_at_once_per_person_per_couple_of_minutes_and_the_review_still_comes(dms, sites, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(botmod, "_monotonic", lambda: clock[0])
+    register("alice_example")
+    store.add_player("lichess", "bob_example", BOB, MONTH, 1500)
+    analysed(spec(1, "alice_example", "x_example"), spec(2, "bob_example", "y_example"))
+    ask(make_ctx(ALICE))
+    ask(make_ctx(ALICE))
+    assert sites.calls == [("lichess", "alice_example")] and len(dms) == 2                  # the second review used what is held
+    ask(make_ctx(BOB))
+    assert sites.calls == [("lichess", "alice_example"), ("lichess", "bob_example")]        # someone else's throttle is their own
+    clock[0] += botmod.LOOKUP_GAP_SECONDS
+    ask(make_ctx(ALICE))
+    assert len(sites.calls) == 3
 
 
 def test_a_game_that_is_found_at_once_makes_no_site_calls(dms, sites):
@@ -616,7 +652,6 @@ def test_the_command_needs_an_account_and_analysis_switched_on(dms, sites, monke
     ctx = make_ctx(ALICE)
     ask(ctx)
     assert reactions(ctx) == [NO] and "isn't switched on" in said(ctx)[0] and sites.calls == []
-    ctx.command.reset_cooldown.assert_called_once_with(ctx)
 
 
 def test_something_that_is_not_a_game_is_refused_before_anything_else(dms, sites):
@@ -624,7 +659,6 @@ def test_something_that_is_not_a_game_is_refused_before_anything_else(dms, sites
     ctx = make_ctx(ALICE)
     ask(ctx, "my last game please")
     assert reactions(ctx) == [NO] and "I can't read 'my last game please' as a game" in said(ctx)[0] and sites.calls == []
-    ctx.command.reset_cooldown.assert_called_once_with(ctx)
 
 
 def test_a_long_argument_is_cut_short_in_the_reply(dms, sites):
@@ -643,10 +677,9 @@ def test_at_most_three_reviews_can_be_waiting(dms, sites):
     ask(ctx, "00000004")
     assert reactions(ctx) == [NO] and "already have 3 reviews waiting" in said(ctx)[0] and obit.waiting_count(ALICE) == 3
     assert statuses()["00000004"][1] == q.NORMAL                                           # and that game wasn't moved up
-    ctx.command.reset_cooldown.assert_called_once_with(ctx)
     again = make_ctx(ALICE)
     ask(again, "00000001")                                                                  # asking again about one already waiting is fine
-    assert reactions(again) == [OK] and obit.waiting_count(ALICE) == 3
+    assert reactions(again) == ["⏳"] and obit.waiting_count(ALICE) == 3
 
 
 def test_a_member_who_cannot_receive_dms_is_told_in_the_channel_and_the_request_is_dropped(monkeypatch, sites):
@@ -737,12 +770,12 @@ def test_the_loop_leaves_a_request_that_is_not_ready_and_survives_a_bad_one(dms,
     assert len(dms) == 1 and [r["game_id"] for r in obit.outstanding()] == ["00000001"]
 
 
-def test_the_command_carries_the_cooldown_and_a_usage_line_and_help_mentions_it():
+def test_the_command_has_a_usage_line_no_cooldown_of_its_own_and_help_mentions_both_forms():
     assert botmod.USAGE["obit"] == "!obit [game link or id]"
-    assert botmod.obit_command._buckets is not None                                        # the same cooldown as !mystats
+    assert botmod.obit_command._buckets._cooldown is None                                   # the throttle on looking at the sites replaces it
     ctx = make_ctx(ALICE)
     asyncio.run(botmod.help_blitz_bot.callback(ctx))
-    assert "`!obit [game link or id]`" in said(ctx)[0] and len(said(ctx)[0]) < 2000
+    assert "`/obit [game link or id]` (or `!obit`)" in said(ctx)[0] and "leaves nothing in the channel" in said(ctx)[0] and len(said(ctx)[0]) < 2000
 
 
 def statuses():
@@ -845,3 +878,216 @@ def test_the_delete_button_is_registered_when_the_bot_starts(monkeypatch):
     monkeypatch.setattr(botmod.bot, "add_view", lambda view: added.append(view))
     asyncio.run(botmod.on_ready())
     assert len(added) == 1 and isinstance(added[0], botmod.DeleteButton)
+
+
+# --- /obit: the same, with nothing in the channel ------------------------------------------------------------------------------
+
+def make_interaction(user_id=ALICE, channel_id=CHANNEL, done=False):
+    state = SimpleNamespace(done=done)
+
+    async def defer(**kwargs):
+        state.done = True
+    response = SimpleNamespace(defer=AsyncMock(side_effect=defer), send_message=AsyncMock(), is_done=lambda: state.done)
+    return SimpleNamespace(user=SimpleNamespace(id=user_id), channel_id=channel_id, response=response, followup=SimpleNamespace(send=AsyncMock()))
+
+
+def slash(interaction, *args):
+    asyncio.run(botmod.obit_slash.callback(interaction, *args))
+
+
+@pytest.fixture(autouse=True)
+def the_blitz_channel(monkeypatch):
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", {CHANNEL})
+
+
+def test_slash_obit_sends_the_review_by_dm_and_answers_only_the_person_asking(dms, sites):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    interaction = make_interaction()
+    slash(interaction, "00000001")
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+    interaction.followup.send.assert_awaited_once_with("I've sent you the review by DM.", ephemeral=True)
+    interaction.response.send_message.assert_not_awaited()
+    assert len(dms) == 1 and dms[0][0] == ALICE and "**OBIT**" in dms[0][1][0]
+
+
+def test_slash_obit_for_a_game_still_being_analysed_says_so_privately(dms, sites):
+    register("alice_example")
+    q.queue_games([spec(1, "alice_example", "x_example")], NOW)
+    interaction = make_interaction()
+    slash(interaction, "00000001")
+    interaction.followup.send.assert_awaited_once_with("Analysing that game now: it's at the front of the queue. I'll DM you the review when it's done.",
+                                                       ephemeral=True)
+    assert dms == [] and len(obit.outstanding()) == 1
+
+
+def test_slash_obit_errors_are_private_too(dms, sites):
+    register("alice_example")
+    interaction = make_interaction()
+    slash(interaction, "not a game")
+    (call,) = interaction.followup.send.await_args_list
+    assert "I can't read 'not a game' as a game" in call.args[0] and call.kwargs == {"ephemeral": True}
+    nobody = make_interaction(BOB)
+    slash(nobody)
+    assert "haven't added an account" in nobody.followup.send.await_args.args[0] and nobody.followup.send.await_args.kwargs == {"ephemeral": True}
+
+
+def test_slash_obit_says_privately_when_dms_are_closed(monkeypatch, sites):
+    async def refuse(user_id, messages):
+        raise forbidden()
+    monkeypatch.setattr(botmod, "_dm", refuse)
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    interaction = make_interaction()
+    slash(interaction, "00000001")
+    assert "Allow direct messages" in interaction.followup.send.await_args.args[0] and interaction.followup.send.await_args.kwargs == {"ephemeral": True}
+
+
+def test_slash_obit_uses_the_person_who_asked(dms, sites):
+    register("alice_example")
+    store.add_player("lichess", "bob_example", BOB, MONTH, 1500)
+    analysed(spec(1, "alice_example", "x_example"), spec(2, "bob_example", "y_example"))
+    interaction = make_interaction(BOB)
+    slash(interaction, "00000001")                                                         # Alice's game
+    assert dms == [] and "can't find that among your games" in interaction.followup.send.await_args.args[0]
+    slash(interaction, "00000002")
+    assert [u for u, _ in dms] == [BOB]
+
+
+def test_slash_obit_only_works_in_the_allowed_channel_and_says_so_privately(dms, sites):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    interaction = make_interaction(channel_id=CHANNEL + 1)
+    slash(interaction, "00000001")
+    interaction.response.send_message.assert_awaited_once_with("This command only works in the blitz channel.", ephemeral=True)
+    interaction.response.defer.assert_not_awaited()
+    assert dms == [] and sites.calls == []
+
+
+def test_slash_obit_is_registered_for_servers_only_with_an_optional_game():
+    command = botmod.bot.tree.get_command("obit")
+    assert command is not None and command.guild_only is True
+    assert [(p.name, p.required) for p in command.parameters] == [("game", False)]
+    assert "DM" in command.description
+
+
+def test_a_failing_slash_command_says_so_privately(caplog):
+    fresh = make_interaction()
+    asyncio.run(botmod.on_app_command_error(fresh, RuntimeError("boom")))
+    fresh.response.send_message.assert_awaited_once_with("something went wrong, check the logs", ephemeral=True)
+    started = make_interaction(done=True)
+    asyncio.run(botmod.on_app_command_error(started, RuntimeError("boom")))
+    started.followup.send.assert_awaited_once_with("something went wrong, check the logs", ephemeral=True)
+    started.response.send_message.assert_not_awaited()
+    hopeless = make_interaction()
+    hopeless.response.send_message = AsyncMock(side_effect=discord.HTTPException(SimpleNamespace(status=500, reason="x"), "x"))
+    asyncio.run(botmod.on_app_command_error(hopeless, RuntimeError("boom")))              # nothing escapes
+
+
+# registering the slash commands
+
+def fake_guild(guild_id):
+    return SimpleNamespace(id=guild_id)
+
+
+def registrations(monkeypatch, *, channels, sync=None):
+    calls = SimpleNamespace(copied=[], synced=[])
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", set(channels))
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channels.get(channel_id))
+    monkeypatch.setattr(botmod.bot.tree, "copy_global_to", lambda guild: calls.copied.append(guild.id))
+
+    async def fake_sync(guild=None):
+        calls.synced.append(guild.id)
+        if sync:
+            sync(guild)
+        return [SimpleNamespace(name="obit")]
+    monkeypatch.setattr(botmod.bot.tree, "sync", fake_sync)
+    return calls
+
+
+def test_the_slash_commands_are_registered_in_the_server_of_each_allowed_channel_once(monkeypatch):
+    channels = {CHANNEL: SimpleNamespace(guild=fake_guild(1)), CHANNEL + 1: SimpleNamespace(guild=fake_guild(1)), CHANNEL + 2: SimpleNamespace(guild=fake_guild(2))}
+    calls = registrations(monkeypatch, channels=channels)
+    asyncio.run(botmod.sync_slash_commands())
+    assert sorted(calls.copied) == [1, 2] and sorted(calls.synced) == [1, 2]              # each server once, and the commands are copied in first
+    asyncio.run(botmod.sync_slash_commands())
+    assert sorted(calls.synced) == [1, 2]                                                 # a reconnect doesn't repeat it
+
+
+def test_a_channel_the_bot_cannot_see_is_skipped(monkeypatch):
+    calls = registrations(monkeypatch, channels={CHANNEL: None})
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", {CHANNEL, 999})
+    asyncio.run(botmod.sync_slash_commands())
+    assert calls.synced == []
+
+
+def test_a_bot_invited_without_the_scope_logs_how_to_fix_it_and_carries_on(monkeypatch, caplog):
+    def refuse(guild):
+        raise discord.Forbidden(SimpleNamespace(status=403, reason="Missing Access"), "Missing Access")
+    calls = registrations(monkeypatch, channels={CHANNEL: SimpleNamespace(guild=fake_guild(1)), CHANNEL + 1: SimpleNamespace(guild=fake_guild(2))}, sync=refuse)
+    with caplog.at_level("WARNING", logger="playmoreblitz"):
+        asyncio.run(botmod.sync_slash_commands())
+    assert calls.synced == [1, 2] and caplog.text.count("applications.commands") == 2      # each server tried, each told about
+
+
+def test_another_failure_is_logged_and_does_not_stop_the_bot(monkeypatch, caplog):
+    def broken(guild):
+        raise discord.HTTPException(SimpleNamespace(status=500, reason="oops"), "server error")
+    registrations(monkeypatch, channels={CHANNEL: SimpleNamespace(guild=fake_guild(1))}, sync=broken)
+    asyncio.run(botmod.sync_slash_commands())
+    assert "couldn't register slash commands in 1" in caplog.text
+
+
+def test_the_bot_registers_its_slash_commands_when_it_starts(monkeypatch):
+    registered = AsyncMock()
+    monkeypatch.setattr(botmod, "sync_slash_commands", registered)
+    for name in ("obit_loop", "refresh_loop", "daily_posts"):
+        monkeypatch.setattr(getattr(botmod, name), "is_running", lambda: True)
+    monkeypatch.setattr(botmod.bot, "add_view", lambda view: None)
+    asyncio.run(botmod.on_ready())
+    registered.assert_awaited_once()
+
+
+def test_the_readme_explains_the_extra_invite_scope():
+    text = open(botmod.__file__.replace("bot.py", "README.md"), encoding="utf-8").read()
+    assert "applications.commands" in text and "`/obit [game]`" in text
+
+
+# --- gaps found by mutation checks -------------------------------------------------------------------------------------------
+
+def test_a_named_game_not_seen_yet_is_found_after_one_look_at_the_sites(dms, sites):
+    register("alice_example")
+    sites.effect = lambda: q.queue_games([spec(7, "alice_example", "x_example")], NOW) if "00000007" not in statuses() else None
+    ctx = make_ctx(ALICE)
+    ask(ctx, "https://lichess.org/00000007")
+    assert sites.calls == [("lichess", "alice_example")] and reactions(ctx) == ["⏳"] and obit.outstanding()[0]["game_id"] == "00000007"
+
+
+def test_a_failure_to_post_the_error_text_is_survived():
+    ctx = make_ctx(ALICE)
+    ctx.send = AsyncMock(side_effect=discord.HTTPException(SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions"))
+    ask(ctx)                                                                                # no account: an error to post
+    assert reactions(ctx) == [NO]
+
+
+def test_the_typing_indicator_shows_while_the_sites_are_looked_at(dms, sites):
+    register("alice_example")
+    entered = []
+
+    class Counting:
+        async def __aenter__(self):
+            entered.append(1)
+
+        async def __aexit__(self, *exc):
+            return False
+    ctx = make_ctx(ALICE)
+    ctx.typing = lambda: Counting()
+    ask(ctx)
+    assert entered == [1] and len(sites.calls) == 1
+
+
+def test_a_queued_slash_request_remembers_the_channel_it_came_from(dms, sites):
+    register("alice_example")
+    q.queue_games([spec(1, "alice_example", "x_example")], NOW)
+    slash(make_interaction(), "00000001")
+    assert obit.outstanding()[0]["channel_id"] == CHANNEL
