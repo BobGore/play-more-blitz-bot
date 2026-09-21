@@ -357,6 +357,7 @@ def make_result(job, data, run, engine_name, nodes):
         "end_ply": end,
         "eval_ply20": summary.eval_ply20,
         "evals": base64.b64encode(analysis.pack_evals(scores)).decode("ascii"),
+        "moments": analysis.moments_to_lists(summary.moments),
         "white": dataclasses.asdict(summary.white),
         "black": dataclasses.asdict(summary.black),
         "site_white_accuracy": data.site_white_accuracy,

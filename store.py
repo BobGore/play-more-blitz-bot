@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS game_analysis (
     middle_ply INTEGER, end_ply INTEGER,   -- where the middlegame and endgame start; NULL if never
     eval_ply20 INTEGER,                    -- centipawns, White's point of view, after 10 moves each
     evals BLOB,                            -- the evaluation after every ply, packed (analysis.pack_evals)
+    moments TEXT,                          -- the flagged moves as JSON [[ply, "i"|"m"|"b", points lost], ...] (analysis.moments_to_json)
     shape TEXT,                            -- our own game-shape label; filled in later
 
     site_white_accuracy REAL, site_black_accuracy REAL,   -- the site's own figures, kept apart from ours
@@ -178,6 +179,9 @@ def _migrate(conn):
     for column in _ADDED_COLUMNS:
         if column not in have:
             conn.execute(f"ALTER TABLE monthly_results ADD COLUMN {column} TEXT")
+    have = {row["name"] for row in conn.execute("PRAGMA table_info(game_analysis)")}
+    if "moments" not in have:  # a table made before flagged moves were kept
+        conn.execute("ALTER TABLE game_analysis ADD COLUMN moments TEXT")
 
 
 @contextmanager

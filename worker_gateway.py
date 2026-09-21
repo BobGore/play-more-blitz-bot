@@ -101,7 +101,8 @@ def handle(worker, request, stdin, now, queue):
     if verb == "claim":
         if len(args) != 1 or not re.fullmatch(r"[0-9]{1,4}", args[0]) or not 1 <= int(args[0]) <= MAX_CLAIM:
             raise Refused(f"claim takes a number of games from 1 to {MAX_CLAIM}")
-        return queue.claim(worker, int(args[0]), now)
+        import analysis
+        return queue.claim(worker, int(args[0]), now, rerun_below=analysis.METHOD_VERSION)
 
     if verb == "submit" and not args:
         results = _json_from(stdin, "results")

@@ -163,6 +163,16 @@ def test_analysisq_shows_the_queue():
     assert text.startswith("**Analysis queue**") and "Done" in text and "Worker desk" in text and "switched off" not in text
 
 
+def test_analysisq_counts_games_still_on_an_older_method():
+    member()
+    analysed(spec(1), spec(2))
+    with store.transaction() as conn:
+        conn.execute("UPDATE game_analysis SET method_version = 1")
+    ctx = make_ctx(ADMIN)
+    run(botmod.analysisq, ctx)
+    assert "Waiting to be redone with the newer method: 2" in said(ctx)[0]
+
+
 def test_analysisq_says_when_analysis_is_off(monkeypatch):
     monkeypatch.setattr(settings, "ANALYSIS_ENABLED", False)
     ctx = make_ctx(ADMIN)

@@ -11,6 +11,7 @@ Times are UTC epoch seconds. A game is identified by (site, game_id) and belongs
 which holds both sides. A registered player is a member; a game is queued if either side is one.
 """
 
+import json
 from collections import Counter
 
 import analysis
@@ -88,8 +89,12 @@ def queue_games(games, now):
     return outcome
 
 
-def claim(worker, limit, now):
+def claim(worker, limit, now, rerun_below=None):
     """Hand `worker` up to `limit` games to analyse: normal priority before low, and newest first within each.
+
+    With `rerun_below` (the current method version), once nothing else is waiting the games already analysed by an
+    older method version are handed out too, newest first, to be analysed again; their old figures stay in place
+    until the new ones replace them.
 
     The games are marked claimed and each try is counted. A game claimed earlier and not reported back within
     ANALYSIS_CLAIM_MINUTES (the worker died, or the machine went off) is put back in the queue first, or marked
@@ -109,6 +114,11 @@ def claim(worker, limit, now):
         rows = conn.execute(
             "SELECT site, game_id, month, ended_at, white_username, black_username, attempts FROM game_analysis "
             "WHERE status = ? ORDER BY priority, ended_at DESC, game_id LIMIT ?", (PENDING, max(0, limit))).fetchall()
+        if rerun_below is not None and len(rows) < limit:
+            rows += conn.execute(
+                "SELECT site, game_id, month, ended_at, white_username, black_username, attempts FROM game_analysis "
+                "WHERE status = ? AND (method_version IS NULL OR method_version < ?) ORDER BY ended_at DESC, game_id LIMIT ?",
+                (DONE, rerun_below, limit - len(rows))).fetchall()
         for r in rows:
             conn.execute("UPDATE game_analysis SET status = ?, claimed_by = ?, claimed_at = ?, attempts = attempts + 1 "
                          "WHERE site = ? AND game_id = ?", (CLAIMED, worker, now, r["site"], r["game_id"]))
@@ -122,6 +132,29 @@ def _number(value, low, high, integer=False):
     if isinstance(value, bool) or not isinstance(value, int if integer else (int, float)):
         return False
     return low <= value <= high
+
+
+def _moments_problem(moments, plies, white, black):
+    """Why a list of flagged moves can't be stored, or None. Each is [ply, "i" | "m" | "b", points lost]; the ply
+    is odd for White and even for Black, and the numbers of each kind must agree with the side's own counts."""
+    if not isinstance(moments, list) or len(moments) > plies:
+        return "moments must be a list with no more entries than plies"
+    found = {"white": {"i": 0, "m": 0, "b": 0}, "black": {"i": 0, "m": 0, "b": 0}}
+    seen = set()
+    for item in moments:
+        if not isinstance(item, list) or len(item) != 3:
+            return "each moment must be [ply, code, points lost]"
+        ply, code, lost = item
+        if not _number(ply, 1, plies, integer=True) or code not in ("i", "m", "b") or not _number(lost, 0, 100):
+            return "a moment has a ply, code or loss out of range"
+        if ply in seen:
+            return "a ply appears twice in the moments"
+        seen.add(ply)
+        found["white" if ply % 2 else "black"][code] += 1
+    for colour, side in (("white", white), ("black", black)):
+        if (found[colour]["i"], found[colour]["m"], found[colour]["b"]) != (side["inaccuracies"], side["mistakes"], side["blunders"]):
+            return f"the {colour} moments do not match its counts"
+    return None
 
 
 def _problem(r):
@@ -158,6 +191,9 @@ def _problem(r):
                 high = plies if field in ("inaccuracies", "mistakes", "blunders") else 2 * analysis.CAP if field == "acpl" else 100
                 if not _number(value, 0, high, integer=integer):
                     return f"{colour} {field} is out of range"
+        bad = _moments_problem(r["moments"], plies, r["white"], r["black"])
+        if bad:
+            return bad
         for key in ("site_white_accuracy", "site_black_accuracy"):
             if r.get(key) is not None and not _number(r[key], 0, 100):
                 return f"{key} is out of range"
@@ -211,7 +247,7 @@ def _store_result(conn, r, now):
     conn.execute(
         """
         UPDATE game_analysis SET status = ?, skip_reason = NULL, last_error = NULL, claimed_by = NULL, analysed_at = ?,
-            engine = ?, nodes = ?, method_version = ?, plies = ?, middle_ply = ?, end_ply = ?, eval_ply20 = ?, evals = ?,
+            engine = ?, nodes = ?, method_version = ?, plies = ?, middle_ply = ?, end_ply = ?, eval_ply20 = ?, evals = ?, moments = ?,
             white_accuracy = ?, black_accuracy = ?, white_acc_opening = ?, black_acc_opening = ?,
             white_acc_middle = ?, black_acc_middle = ?, white_acc_end = ?, black_acc_end = ?,
             white_inaccuracies = ?, black_inaccuracies = ?, white_mistakes = ?, black_mistakes = ?,
@@ -220,7 +256,7 @@ def _store_result(conn, r, now):
         WHERE site = ? AND game_id = ?
         """,
         (DONE, now, r["engine"], r["nodes"], r["method_version"], r["plies"], r["middle_ply"], r["end_ply"], r["eval_ply20"],
-         bytes(r["evals"]),
+         bytes(r["evals"]), json.dumps(sorted(r["moments"]), separators=(",", ":")),
          w["accuracy"], b["accuracy"], w["acc_opening"], b["acc_opening"], w["acc_middle"], b["acc_middle"], w["acc_end"], b["acc_end"],
          w["inaccuracies"], b["inaccuracies"], w["mistakes"], b["mistakes"], w["blunders"], b["blunders"], w["acpl"], b["acpl"],
          r.get("site_white_accuracy"), r.get("site_black_accuracy"), r["site"], r["game_id"]))
@@ -250,7 +286,7 @@ def release(worker, site, game_id, *, skip_reason=None, error=None):
     return True
 
 
-def status(now):
+def status(now, method_version=None):
     """A picture of the queue for an admin: counts by status, the low-priority backlog, how long the oldest pending
     game has waited (seconds, or None), and each worker's name and how long ago it last asked for work."""
     with store.transaction() as conn:
@@ -259,10 +295,13 @@ def status(now):
         oldest = conn.execute("SELECT MIN(queued_at) FROM game_analysis WHERE status = ?", (PENDING,)).fetchone()[0]
         workers = conn.execute("SELECT name, last_seen FROM analysis_workers ORDER BY last_seen DESC").fetchall()
         over = conn.execute("SELECT COUNT(*) FROM game_analysis WHERE status = ? AND skip_reason = ?", (SKIPPED, OVER_MONTHLY_LIMIT)).fetchone()[0]
+        older = 0 if method_version is None else conn.execute(
+            "SELECT COUNT(*) FROM game_analysis WHERE status = ? AND (method_version IS NULL OR method_version < ?)", (DONE, method_version)).fetchone()[0]
     return {
         "counts": {s: counts.get(s, 0) for s in (PENDING, CLAIMED, DONE, SKIPPED, FAILED)},
         "low_priority_pending": low,
         "over_limit": over,
+        "older_method": older,
         "oldest_pending_seconds": None if oldest is None else now - oldest,
         "workers": [(w["name"], now - w["last_seen"]) for w in workers],
     }

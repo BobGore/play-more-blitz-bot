@@ -220,3 +220,9 @@ def test_a_day_before_the_tenth_has_no_leading_zero():
 def test_no_panel_line_ends_in_spaces():
     lines = panel(ra.render_lastgame("alice_example", "lichess", row()))
     assert all(line == line.rstrip() for line in lines)
+
+
+def test_games_waiting_to_be_redone_by_a_newer_method_are_listed_only_when_there_are_some():
+    assert "Waiting to be redone with the newer method: 536" in ra.render_queue_status(status(older_method=536), True)
+    assert "redone" not in ra.render_queue_status(status(older_method=0), True)
+    assert "redone" not in ra.render_queue_status(status(), True)

@@ -768,3 +768,18 @@ def test_main_wires_the_service_settings_through(monkeypatch, tmp_path, capsys):
     path.write_text("GATEWAY_TARGET=u@h\nGATEWAY_KEY=/k\nSTOCKFISH_PATH=/sf\nGATEWAY_KNOWN_HOSTS=/kh\nLOG_FILE=/l.log\n", encoding="utf-8")
     assert w.main(["--config", str(path), "--check"]) == 1
     assert seen["known_hosts"] == "/kh" and seen["log"] == "/l.log"
+
+
+# --- the flagged moves ----------------------------------------------------------------------------------------------------------
+
+def test_a_game_with_errors_sends_its_flagged_moves_and_they_agree_with_its_counts():
+    def swingy(board, token):
+        return ("cp", -400 if len(board.move_stack) == 5 else 0), next(iter(board.legal_moves)).uci()
+    run = w.analyse_moves(swingy, RUY)
+    result = w.make_result(JOB, gd.GameData(tuple(RUY), None, None), run, "E", 1)
+    # White's move on ply 5 drops the evaluation to -4.00 (a blunder), and Black's reply on ply 6 gives it all back
+    assert [(ply, code) for ply, code, _ in result["moments"]] == [(5, "b"), (6, "b")]
+    assert result["white"]["blunders"] == 1 and result["black"]["blunders"] == 1 and all(lost > 30 for _, _, lost in result["moments"])
+    assert q._problem({**result, "evals": base64.b64decode(result["evals"])}) is None
+    assert result["moments"] == analysis.moments_to_lists(analysis.summarise(run[0], result["middle_ply"], result["end_ply"], run[1], run[2]).moments)
+    json.dumps(result)

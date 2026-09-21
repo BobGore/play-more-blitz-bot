@@ -15,6 +15,7 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
+import analysis
 import analysis_feed
 import analysis_queue
 import analysis_reports
@@ -571,7 +572,7 @@ async def lastgame(ctx, username: Optional[str] = None, site: Optional[str] = No
 @commands.check(_admin_only)
 async def analysisq(ctx):
     """Admins only: how the analysis queue stands, and whether the worker is asking for work."""
-    status = await asyncio.to_thread(analysis_queue.status, int(datetime.now(timezone.utc).timestamp()))
+    status = await asyncio.to_thread(analysis_queue.status, int(datetime.now(timezone.utc).timestamp()), analysis.METHOD_VERSION)
     await ctx.send(render_analysis.render_queue_status(status, settings.ANALYSIS_ENABLED))
 
 

@@ -62,8 +62,9 @@ def records(site, username, games):
     return [r for r in made if r is not None], made.count(None)
 
 
-def game_url(site, game_id):
-    """The address of a game on its site, from the id game_id() found."""
+def game_url(site, game_id, ply=None):
+    """The address of a game on its site, from the id game_id() found. Lichess can open the game at a ply; for
+    Chess.com the ply is ignored until its link form is checked."""
     if site == "lichess":
-        return f"https://lichess.org/{game_id}"
+        return f"https://lichess.org/{game_id}" + (f"#{int(ply)}" if ply else "")
     return f"https://www.chess.com/game/{game_id}"

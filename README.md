@@ -236,7 +236,9 @@ plays: the site and its id for the game, when it ended, the time control, the re
 usernames (the opponent's is in the public game record too), the registered player's rating change, the ratings the site
 reports, and the site's own opening name and ECO code. Once a game has been analysed the row also holds the engine's
 figures for both sides (accuracy overall and by phase, inaccuracies, mistakes, blunders, average centipawn loss) and a
-packed list of the evaluation after each move. The moves themselves are never stored.
+packed list of the evaluation after each move, and the ply numbers of the moves called inaccuracies, mistakes and
+blunders with how much each cost (numbers only, so the game can be opened at that position from its link). The moves
+themselves are never stored.
 
 ## Development
 

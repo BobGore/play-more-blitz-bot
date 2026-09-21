@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from analysis_helpers import moments_for
 
 import analysis
 import analysis_queue as q
@@ -50,6 +51,7 @@ def result(game_id="g00001", **over):
          "middle_ply": 12, "end_ply": None, "eval_ply20": 10, "white": side, "black": dict(side, accuracy=70.0),
          "evals": base64.b64encode(analysis.pack_evals([("cp", i) for i in range(plies)])).decode()}
     r.update(over)
+    r.setdefault("moments", moments_for(r["white"], r["black"]))
     return r
 
 

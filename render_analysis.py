@@ -129,6 +129,8 @@ def render_queue_status(status, enabled):
         f"Skipped         {counts['skipped']:>6,}" + (f"   ({status['over_limit']:,} over the monthly limit)" if status["over_limit"] else ""),
         f"Failed          {counts['failed']:>6,}",
     ]
+    if status.get("older_method"):
+        lines.append(f"Waiting to be redone with the newer method: {status['older_method']:,}")
     if status["oldest_pending_seconds"] is not None:
         lines.append(f"Oldest waiting game: {duration(status['oldest_pending_seconds'])}")
     for name, seconds in status["workers"]:

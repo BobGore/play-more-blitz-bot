@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+from analysis_helpers import moments_for
+
 import analysis
 import analysis_queue as q
 import settings
@@ -311,6 +313,7 @@ def result(game_id="g00001", **over):
          "white": side(), "black": side(accuracy=77.0, inaccuracies=5, mistakes=2, blunders=1, acpl=88),
          "site_white_accuracy": 90.1, "site_black_accuracy": None}
     r.update(over)
+    r.setdefault("moments", moments_for(r["white"], r["black"]))
     return r
 
 

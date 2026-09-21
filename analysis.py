@@ -12,12 +12,14 @@ for White, and "mate" n is a forced mate in n moves (positive: White mates, nega
 starting position counts as 15 centipawns, as it does on Lichess.
 """
 
+import json
 import math
 import statistics
 import struct
 from dataclasses import dataclass
 
-METHOD_VERSION = 1  # raised whenever a change to the method would change the figures, so older rows can be re-run
+METHOD_VERSION = 2  # raised whenever a change to the method would change the figures or what is kept, so older rows can be re-run
+# (2: each game also keeps the plies of the moves called inaccuracies, mistakes and blunders)
 INITIAL_CP = 15
 CAP = 1000  # accuracy treats every evaluation as at most this many centipawns, and a forced mate as exactly this
 _K = -0.00368208  # Lichess's fit of centipawns to winning chances
@@ -127,10 +129,30 @@ class Side:
 
 
 @dataclass(frozen=True)
+class Moment:
+    """A move called an inaccuracy, mistake or blunder: its ply (odd for White, even for Black), which of the three
+    ("inaccuracy", "mistake" or "blunder") and how many points of win probability it cost the player who made it."""
+
+    ply: int
+    verdict: str
+    lost: float
+
+
+@dataclass(frozen=True)
 class Summary:
     white: Side
     black: Side
     eval_ply20: int | None  # centipawns, White's point of view, after 10 moves each (None for a shorter game)
+    moments: tuple = ()  # the Moments of both sides, in the order played
+
+
+def _lost_points(prev, cur, white):
+    """Win-probability points a move cost the player who made it (0 if it cost nothing)."""
+    if prev[0] == "cp" and cur[0] == "cp":
+        change = winning_chances(cur[1]) - winning_chances(prev[1])
+        return max(0.0, 50 * (-change if white else change))
+    before, after = win_percent(as_cp(prev)), win_percent(as_cp(cur))  # a mate is involved: the capped scale will do
+    return max(0.0, (before - after) if white else (after - before))
 
 
 def _phase_accuracy(colour, cps, indexes):
@@ -153,6 +175,7 @@ def summarise(scores, middle, end, bests=None, played=None):
     cps = [as_cp(s) for s in scores]
     counts = {"white": {"inaccuracy": 0, "mistake": 0, "blunder": 0}, "black": {"inaccuracy": 0, "mistake": 0, "blunder": 0}}
     losses = {"white": [], "black": []}
+    moments = []
     for i in range(n):
         white = i % 2 == 0
         colour = "white" if white else "black"
@@ -163,6 +186,7 @@ def summarise(scores, middle, end, bests=None, played=None):
             verdict = None
         if verdict:
             counts[colour][verdict] += 1
+            moments.append(Moment(i + 1, verdict, round(_lost_points(prev, scores[i], white), 1)))
         losses[colour].append(max(0, (prev_cp - cps[i]) if white else (cps[i] - prev_cp)))
 
     overall = game_accuracy(True, cps)
@@ -186,7 +210,7 @@ def summarise(scores, middle, end, bests=None, played=None):
             blunders=counts[colour]["blunder"],
             acpl=round(sum(losses[colour]) / len(losses[colour])) if losses[colour] else None,
         )
-    return Summary(sides["white"], sides["black"], cps[_OPENING_SPAN - 1] if n >= _OPENING_SPAN else None)
+    return Summary(sides["white"], sides["black"], cps[_OPENING_SPAN - 1] if n >= _OPENING_SPAN else None, tuple(moments))
 
 
 # --- packing the evaluation curve for the database ------------------------------------------------------
@@ -219,3 +243,27 @@ def unpack_evals(blob):
         else:
             scores.append(("cp", value))
     return scores
+
+
+# --- keeping the flagged moves ----------------------------------------------------------------------------
+
+_VERDICT_CODES = {"inaccuracy": "i", "mistake": "m", "blunder": "b"}
+_CODE_VERDICTS = {code: name for name, code in _VERDICT_CODES.items()}
+
+
+def moments_to_lists(moments):
+    """The moments as [[ply, "i" | "m" | "b", points lost], ...], ready for JSON."""
+    return [[m.ply, _VERDICT_CODES[m.verdict], m.lost] for m in moments]
+
+
+def moments_to_json(moments):
+    """The moments as compact JSON for the database."""
+    return json.dumps(moments_to_lists(moments), separators=(",", ":"))
+
+
+def moments_from_json(text):
+    """The Moments in `text` (moments_to_json's output); an empty tuple for None, which is what a game analysed
+    before moments were kept has."""
+    if not text:
+        return ()
+    return tuple(Moment(int(ply), _CODE_VERDICTS[code], float(lost)) for ply, code, lost in json.loads(text))
