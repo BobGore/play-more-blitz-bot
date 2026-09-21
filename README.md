@@ -30,6 +30,7 @@ see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).**
 | `!setowner <username> <@member> [site]` | Admins only, in a direct message to the bot | Hands a registered account to the member it belongs to. Accounts an admin registers without naming a member are the admin's own, which makes `!obit` and `!mystats` with no name treat them all as the admin's; this fixes that. Non-admin owners keep to one account per site, and the member must be on the server. |
 | `!export [summary] [period]` in a direct message to the bot (also `/export [period] [what]` in the channel) | Registered members who are on the server, for their own accounts | Your own games as CSV files for a spreadsheet, sent to you by DM: one file per account (a username on a site), one line per game the bot holds, oldest first, analysed or not (the analysis columns are blank until a game is analysed). Columns: when, site, account, link, colour, result, how it ended, time control, opening, ECO, rating before and change, opponent and rating, analysis status, your accuracy overall and by phase, your inaccuracies, mistakes, blunders and centipawn loss, the opponent's, the site's own accuracy, the engine's score after 10 moves, and your worst moments with their move numbers. The period is this month (the default), `last`, `week` (the last seven days), a month like `2026-08`, or `all`. `summary` gives one line per account for the period (games, record, rating start to end, average accuracy, mistakes per game, losses on time) to paste into your own sheet. Games from before analysis was switched on aren't held, and the reply says so when the month's count is higher. Google Sheets can import the file. |
 | `!usage [days]` | Admins only, in a direct message to the bot | How the bot has been used over the last 1 to 30 days (7 by default): per day the commands run, the people who used it and the errors, then the most used commands and the reviews and exports sent. Counts only. |
+| `!clear` | Anyone on the server, in a direct message to the bot | Deletes the messages the bot has sent you in that conversation, old ones included (Discord doesn't let you delete a bot's messages in a DM yourself, but the bot can delete its own). Only the bot's messages go, the most recent 1000 in one go: run it again if some are left. Everything the bot says in a DM also carries a 🗑️ Delete button. |
 | `!closemonth` | Admins only, in a direct message to the bot | Closes any finished month that is still open and posts its final table. Silent for everyone else. |
 | `!helpblitzbot` | Anyone | The command list. |
 
@@ -178,8 +179,8 @@ To restore, stop the bot, copy the chosen backup over the database file, and sta
 The bot tells you when something needs attention, by a private message to the people in `ALERT_USER_IDS` (just Bob to
 begin with), headed "⚠ PlayMoreBlitz":
 
-- **An unexpected error** in a command (the command and the kind of error, and nothing about the person). The same
-  error is reported at most every 30 minutes.
+- **An unexpected error** in a command (the command, the kind of error and the Discord ID of whoever ran it, so you can
+  find them and see what happened in the log). The same error is reported at most every 30 minutes.
 - **The analysis worker has gone quiet:** games are waiting and it hasn't asked for work for 15 minutes (a reboot of
   the EliteDesk is shorter than that), or it never has.
 - **The backups have stopped:** the newest is two or more days old, or the backup folder is missing or empty.

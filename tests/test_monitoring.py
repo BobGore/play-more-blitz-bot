@@ -153,6 +153,8 @@ def test_failing_refreshes_are_reported_from_the_third_cycle_running():
 def test_an_error_alert_names_the_command_and_the_error_and_is_cut_short():
     text = monitoring.error_alert("!obit", ValueError("bad value"))
     assert text == "!obit hit an unexpected error (ValueError: bad value). The log has the details."
+    assert monitoring.error_alert("!obit", ValueError("bad value"), 1433) == "!obit from 1433 hit an unexpected error (ValueError: bad value). The log has the details."
+    assert monitoring.error_alert("/obit", ValueError("x"), 0).startswith("/obit from 0 hit")                 # an ID of zero is still an ID
     wrapped = RuntimeError("outer")
     wrapped.original = KeyError("inner")
     assert "KeyError: 'inner'" in monitoring.error_alert("!x", wrapped) and "outer" not in monitoring.error_alert("!x", wrapped)

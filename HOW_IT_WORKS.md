@@ -84,7 +84,8 @@ the bot was invited without the `applications.commands` scope: re-authorise it (
 discord.py does, so that cannot go unnoticed again):
 
 - In a server: only in `ALLOWED_CHANNEL_IDS`, and never the system commands.
-- In a DM to the bot: `!obit` and `!export` (for anyone who is on the server and registered), and the admin system
+- In a DM to the bot: `!obit` and `!export` (for anyone who is on the server and registered), `!clear` (deletes the bot's
+  own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the admin system
   commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
@@ -315,7 +316,7 @@ hours while it lasts, and forgotten when it clears (so a return is reported at o
 
 | Alert says | It means | First thing to check | Usual fix |
 | --- | --- | --- | --- |
-| "…hit an unexpected error (Type: message)" | A command raised something other than a normal refusal. | `journalctl -u playmoreblitz` for the traceback just before. | Fix the bug; the counts in `!usage` show how often. |
+| "!x from <id> hit an unexpected error (Type: message)" | A command raised something other than a normal refusal; the ID is whoever ran it. | `journalctl -u playmoreblitz` for the traceback (it says `!x failed for <id>`) and the lines just before it about that ID. | Fix the bug; the counts in `!usage` show how often. |
 | "N games are waiting… no analysis worker has ever asked" / "The analysis worker last asked for work X ago" | The EliteDesk worker is not polling (15 min+, with games waiting). | `!analysisq`; the worker log; is the EliteDesk on and the task running (`schtasks /Query /TN PlayMoreBlitzWorker`)? Can it reach the Minix over ssh? | Start the task; fix the network/key; a reboot of the EliteDesk starts it by itself. |
 | "The newest backup is from … days ago" / "backup folder … is missing" / "no backups" | The nightly backup isn't running. | Is the USB drive mounted (`df`)? `systemctl status playmoreblitz-backup.service`; `journalctl -u playmoreblitz-backup`. | Remount, rerun `venv/bin/python backup.py`. |
 | "The last N refresh cycles all failed" | Every player's refresh failed N cycles running (the sites can't be reached). | `journalctl` for `refresh failed` lines; can the Minix reach Chess.com and Lichess? | Network/DNS; wait if a site is down. |
@@ -330,6 +331,25 @@ pings stop. The service also restarts itself after a crash (`Restart=always`, 10
 Always start with the log: `journalctl -u playmoreblitz -n 100 --no-pager`. Every command that reaches the bot logs
 `command !x from <id> in channel <id>`; a refused one logs `ignored: …`. **Nothing logged at all means the message never
 reached the bot.**
+
+**Reading the log: what a request that worked looks like.** Every line names the Discord ID of whoever asked, and none carries
+what they typed or what the bot sent (only IDs, outcomes, counts and the public game id):
+
+```
+command !obit from 1433… in channel 1551…                  the request arrived (a channel id that isn't the server's is a DM)
+DM sent to 1433… (1 message)                               the DM was delivered
+review of lichess abcd1234 sent to 1433…                   which review
+obit request from 1433…: sent                              the request is answered   (other outcomes: waiting, no_dm, error)
+
+command !export from 1433… in channel 1551…
+export request from 1433… (games): 2 file(s) ready         (refused = it said why to the person, not in the log)
+export sent to 1433…: 2 messages, 2 files
+```
+
+A failure says who too: `!obit failed for 1433… in channel …` with the traceback, the alert DM begins
+`!obit from 1433… hit an unexpected error`, `couldn't send the review of … to 1433…: they don't accept DMs from the bot`
+is a warning, and `the request of 1433… for lichess … was closed without a review (cant)` says a game couldn't be analysed.
+Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" | grep 1433`.
 
 | Symptom | Likely cause | What to do |
 | --- | --- | --- |

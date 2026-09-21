@@ -150,7 +150,7 @@ def test_an_unexpected_error_in_a_command_is_counted_alerted_and_answered_in_the
     ctx = error_ctx()
     run(botmod.on_command_error(ctx, commands.CommandInvokeError(RuntimeError("boom"))))
     assert totals() == {"error": 1}
-    assert dms == [(BOB, ["⚠ PlayMoreBlitz: !results hit an unexpected error (RuntimeError: boom). The log has the details."])]
+    assert dms == [(BOB, ["⚠ PlayMoreBlitz: !results from 2 hit an unexpected error (RuntimeError: boom). The log has the details."])]
     assert ctx.send.await_args.args[0] == "something went wrong, check the logs"
 
 
@@ -170,7 +170,7 @@ def test_a_plain_exception_with_no_command_is_still_handled(dms):
     ctx = error_ctx()
     ctx.command = None
     run(botmod.on_command_error(ctx, RuntimeError("boom")))
-    assert "a command hit an unexpected error (RuntimeError: boom)" in dms[0][1][0]
+    assert "a command from 2 hit an unexpected error (RuntimeError: boom)" in dms[0][1][0]
 
 
 @pytest.mark.parametrize("error", [
@@ -182,10 +182,10 @@ def test_ordinary_refusals_are_neither_counted_as_errors_nor_alerted(dms, error)
 
 
 def test_an_error_in_a_slash_command_is_counted_alerted_and_answered_privately(dms):
-    interaction = SimpleNamespace(command=SimpleNamespace(name="obit"), response=SimpleNamespace(is_done=lambda: False, send_message=AsyncMock()),
+    interaction = SimpleNamespace(command=SimpleNamespace(name="obit"), user=SimpleNamespace(id=ALICE), response=SimpleNamespace(is_done=lambda: False, send_message=AsyncMock()),
                                   followup=SimpleNamespace(send=AsyncMock()))
     run(botmod.on_app_command_error(interaction, discord.app_commands.CommandInvokeError(SimpleNamespace(name="obit"), RuntimeError("boom"))))
-    assert totals() == {"error": 1} and dms[0][1][0].startswith("⚠ PlayMoreBlitz: /obit hit an unexpected error (RuntimeError: boom)")
+    assert totals() == {"error": 1} and dms[0][1][0].startswith("⚠ PlayMoreBlitz: /obit from 2 hit an unexpected error (RuntimeError: boom)")
     interaction.response.send_message.assert_awaited_once_with("something went wrong, check the logs", ephemeral=True)
 
 
@@ -543,3 +543,15 @@ def test_the_logs_note_nothing_when_all_is_well(dms, caplog):
     with caplog.at_level(logging.WARNING, logger="playmoreblitz"):
         run(botmod.health_loop.coro())
     assert caplog.text == ""
+
+
+def test_a_failure_says_who_was_asking_in_the_log_and_in_the_alert(dms, caplog):
+    with caplog.at_level("ERROR", logger="playmoreblitz"):
+        run(botmod.on_command_error(error_ctx("obit"), commands.CommandInvokeError(RuntimeError("boom"))))
+    assert f"!obit failed for {ALICE} in channel 5" in caplog.text and dms[0][1][0].startswith(f"⚠ PlayMoreBlitz: !obit from {ALICE} hit")
+    caplog.clear()
+    interaction = SimpleNamespace(command=SimpleNamespace(name="export"), user=SimpleNamespace(id=ALICE), response=SimpleNamespace(is_done=lambda: True, send_message=AsyncMock()),
+                                  followup=SimpleNamespace(send=AsyncMock()))
+    with caplog.at_level("ERROR", logger="playmoreblitz"):
+        run(botmod.on_app_command_error(interaction, RuntimeError("boom")))
+    assert f"/export failed for {ALICE}" in caplog.text and dms[1][1][0].startswith(f"⚠ PlayMoreBlitz: /export from {ALICE} hit")

@@ -77,6 +77,7 @@ USAGE = {
     "obit": "!obit [game link or id]",
     "export": "!export [summary] [period]",
     "usage": "!usage [days]",
+    "clear": "!clear",
     "setowner": "!setowner <username> <@member> [site]",
 }
 
@@ -84,7 +85,22 @@ intents = discord.Intents.default()
 intents.message_content = True
 # Command input gets echoed back in replies unfiltered - this stops any of it
 # from ever triggering a real @everyone/@here/role/user ping.
-bot = commands.Bot(
+class DMContext(commands.Context):
+    """The context the bot uses: whatever it says in a direct message gets a Delete button, because Discord doesn't let anyone
+    delete a bot's message in a DM themselves. In a server nothing changes."""
+
+    async def send(self, content=None, **kwargs):
+        if self.guild is None and "view" not in kwargs:
+            kwargs["view"] = DeleteButton()
+        return await super().send(content, **kwargs)
+
+
+class PlayMoreBlitzBot(commands.Bot):
+    async def get_context(self, origin, *, cls=DMContext):
+        return await super().get_context(origin, cls=cls)
+
+
+bot = PlayMoreBlitzBot(
     command_prefix="!",
     intents=intents,
     help_command=None,
@@ -328,7 +344,7 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export")  # the private commands members can send the bot in a direct message
+DM_COMMANDS = ("obit", "export", "clear")  # the private commands members can send the bot in a direct message
 ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
@@ -409,6 +425,7 @@ async def help_blitz_bot(ctx):
         "`/export [period] [what]` - your own games as a CSV file for a spreadsheet, one file per account, sent by DM; period is "
         "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or send me `!export` in a direct "
         "message\n"
+        "`!clear` - send it to me in a direct message to delete everything I've sent you there, old messages included\n"
     )
 
 
@@ -866,6 +883,7 @@ async def _dm(user_id, messages):
     user = bot.get_user(user_id) or await bot.fetch_user(user_id)
     for message in messages:
         await user.send(message, view=DeleteButton())
+    log.info("DM sent to %s (%d message%s)", user_id, len(messages), "" if len(messages) == 1 else "s")  # never what it said
 
 
 async def _process_obit(request, *, immediate=False):
@@ -885,6 +903,7 @@ async def _process_obit(request, *, immediate=False):
     if not immediate and await _member_status(request["user_id"]) is False:
         log.info("dropped the !obit request of %s: they are no longer on the server", request["user_id"])
         return "closed"
+    game = f"{request['site']} {request['game_id']}"
     try:
         if action == obit.SEND:
             side = obit.side_of(row, request["username"])
@@ -895,6 +914,7 @@ async def _process_obit(request, *, immediate=False):
             messages = ["I couldn't get to that game's review in time (the analysis is behind). Ask again in a while."]
         await _dm(request["user_id"], messages)
     except discord.Forbidden:
+        log.warning("couldn't send the review of %s to %s: they don't accept DMs from the bot", game, request["user_id"])
         if not immediate:
             await _say_no_dm(request["channel_id"], request["user_id"])
         return "no_dm"
@@ -904,8 +924,10 @@ async def _process_obit(request, *, immediate=False):
                                 request["channel_id"], request["requested_at"])
         return "waiting"
     if action == obit.SEND:
+        log.info("review of %s sent to %s", game, request["user_id"])
         await _count(usage_stats.OBIT_SENT)
         return "sent"
+    log.info("the request of %s for %s was closed without a review (%s)", request["user_id"], game, action)
     return "closed"
 
 
@@ -929,6 +951,14 @@ TEXT_STAYS_SECONDS = 20  # how long the bot's error text to a quiet !obit stays 
 
 
 async def _obit_flow(user_id, channel_id, game, *, typing=None):
+    """!obit and /obit up to what to tell the person (see _obit_steps); notes in the log how the request came out, by kind only:
+    sent, waiting, no_dm or error, never what the person typed."""
+    kind, text = await _obit_steps(user_id, channel_id, game, typing=typing)
+    log.info("obit request from %s: %s", user_id, kind)
+    return kind, text
+
+
+async def _obit_steps(user_id, channel_id, game, *, typing=None):
     """Everything !obit and /obit do, up to what to tell the person. Returns (kind, text): "sent" (the review is in their
     DMs), "waiting" (queued: it will follow), "no_dm" (they don't accept DMs from the bot) or "error" (text says why).
 
@@ -1054,6 +1084,14 @@ _exports = {}  # user id -> when they last had an export (monotonic seconds)
 
 
 async def _export_flow(user_id, what, period_text):
+    """!export and /export up to sending (see _export_steps); notes in the log when a request is refused, without the reason
+    (which may quote what the person typed)."""
+    parts, error = await _export_steps(user_id, what, period_text)
+    log.info("export request from %s (%s): %s", user_id, what, "refused" if error else f"{sum(1 for p in parts if 'data' in p)} file(s) ready")
+    return parts, error
+
+
+async def _export_steps(user_id, what, period_text):
     """Everything !export and /export do, up to sending. Returns (parts, error): `parts` is a list with one dict per account
     (the unit is a username on a site) of "text" and, unless that account had no games, "filename" and "data" (the CSV);
     `error` is text saying why not."""
@@ -1103,6 +1141,8 @@ async def _dm_parts(user_id, parts):
     for part in parts:
         file = discord.File(io.BytesIO(part["data"]), filename=part["filename"]) if "data" in part else None
         await user.send(part["text"], file=file, view=DeleteButton())
+    log.info("export sent to %s: %d message%s, %d file%s", user_id, len(parts), "" if len(parts) == 1 else "s",
+             sum(1 for p in parts if "data" in p), "" if sum(1 for p in parts if "data" in p) == 1 else "s")
     await _count(usage_stats.EXPORT_SENT)
 
 
@@ -1171,13 +1211,54 @@ async def export_slash(interaction: discord.Interaction, period: Optional[str] =
                                     ephemeral=True)
 
 
+CLEAR_HINT = "Send me `!clear` in a direct message: it clears what I've sent you there, so it isn't done in the channel."
+CLEAR_LIMIT = 1000  # how many recent messages in the conversation `!clear` looks through in one go
+
+
+@bot.command(name="clear")
+async def clear_command(ctx):
+    """In a direct message with the bot: delete the messages the bot has sent you there, old ones included. Discord doesn't let you
+    delete a bot's messages in a DM yourself, but a bot can delete its own. Only what the bot sent goes (your own messages are yours to
+    delete), from the most recent CLEAR_LIMIT in the conversation: run it again if some are left."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(CLEAR_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
+        return
+    status = await _member_status(ctx.author.id)
+    if status is not True:
+        await _react(ctx, "❌")
+        await ctx.send(_not_a_member_text(status))
+        return
+    deleted = failed = 0
+    async with ctx.typing():
+        async for message in ctx.channel.history(limit=CLEAR_LIMIT):
+            if message.author.id != bot.user.id:
+                continue
+            try:
+                await message.delete()
+                deleted += 1
+            except discord.NotFound:
+                pass  # already gone
+            except discord.HTTPException:
+                failed += 1
+    log.info("!clear for %s: deleted %d of the bot's messages (%d failed)", ctx.author.id, deleted, failed)
+    await _react(ctx, "❌" if failed else "✅")
+    try:
+        await ctx.send(f"Deleted {deleted} of my messages here." + (f" I couldn't delete {failed}." if failed else ""), delete_after=30)
+    except discord.HTTPException as exc:
+        log.warning("couldn't answer a direct message (%s)", exc.status)
+
+
 @bot.tree.error
 async def on_app_command_error(interaction, error):
     """A slash command that fails says so privately, never in the channel."""
-    log.exception("slash command failed", exc_info=error)
     name = getattr(getattr(interaction, "command", None), "name", None) or "a slash command"
+    who = getattr(getattr(interaction, "user", None), "id", None)
+    log.exception("/%s failed for %s", name, who, exc_info=error)
     await _count(usage_stats.ERROR)
-    await _alert_admins(f"error:/{name}:{type(getattr(error, 'original', error)).__name__}", monitoring.error_alert(f"/{name}", error),
+    await _alert_admins(f"error:/{name}:{type(getattr(error, 'original', error)).__name__}", monitoring.error_alert(f"/{name}", error, who),
                         monitoring.ERROR_REPEAT_SECONDS)
     text = "something went wrong, check the logs"
     try:
@@ -1322,11 +1403,11 @@ async def on_command_error(ctx, error):
             except discord.HTTPException as exc:
                 log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
     else:
-        log.exception("command failed", exc_info=error)
         name = getattr(ctx.command, "name", None) or "a command"
+        log.exception("!%s failed for %s in channel %s", name, ctx.author.id, ctx.channel.id, exc_info=error)
         await _count(usage_stats.ERROR)
-        await _alert_admins(f"error:{name}:{type(getattr(error, 'original', error)).__name__}", monitoring.error_alert(f"!{name}", error),
-                            monitoring.ERROR_REPEAT_SECONDS)
+        await _alert_admins(f"error:{name}:{type(getattr(error, 'original', error)).__name__}",
+                            monitoring.error_alert(f"!{name}", error, ctx.author.id), monitoring.ERROR_REPEAT_SECONDS)
         await _reject(ctx, "something went wrong, check the logs")
 
 

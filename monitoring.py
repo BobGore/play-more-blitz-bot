@@ -86,8 +86,10 @@ def refresh_problem(consecutive):
     return None
 
 
-def error_alert(command, error):
-    """Words for an unexpected error in a command. Names the command and the kind of error, and nothing about the person."""
+def error_alert(command, error, user_id=None):
+    """Words for an unexpected error in a command. Names the command, the kind of error and, if given, the Discord ID of
+    whoever ran it (so the person running the bot can find them, and see what happened in the log), and nothing else about them."""
     error = getattr(error, "original", error)
     detail = f"{type(error).__name__}: {error}".strip()
-    return f"{command} hit an unexpected error ({detail[:MAX_ERROR_TEXT]}). The log has the details."
+    who = f" from {user_id}" if user_id is not None else ""
+    return f"{command}{who} hit an unexpected error ({detail[:MAX_ERROR_TEXT]}). The log has the details."
