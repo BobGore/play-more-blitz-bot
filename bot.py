@@ -15,11 +15,15 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
+import analysis_feed
+import analysis_queue
+import analysis_reports
 import announce
 import gamecache
 import monthend
 import refresh
 import render
+import render_analysis
 import settings
 import singleton
 import sources
@@ -55,6 +59,7 @@ USAGE = {
     "100gobnext": "!100gobnext [username] [site]",
     "mystats": "!mystats [username] [site]",
     "mystatsfull": "!mystatsfull [username] [site]",
+    "lastgame": "!lastgame [username] [site]",
 }
 
 intents = discord.Intents.default()
@@ -271,6 +276,7 @@ async def help_blitz_bot(ctx):
         "`!100gobnext [username]` - sign up for next month's challenge\n"
         "`!mystats [username]` - one player's results and openings this month (yours if no name)\n"
         "`!mystatsfull [username]` - their records and splits by opponent, colour, day and time\n"
+        "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
     )
 
 
@@ -462,13 +468,22 @@ async def _player_stats(ctx, username, site, command, full):
             await _reject(ctx, str(exc), refund_cooldown=True)
             return
 
+    analysis_text = None
+    if not full:
+        try:  # the analysis part is a bonus: if it can't be read, the rest of the summary still goes out
+            analysis_text = render_analysis.mystats_part(
+                await asyncio.to_thread(analysis_reports.month_summary, player.site, player.username, month))
+        except Exception:
+            log.exception("could not read the analysis for %s on %s", player.username, player.site)
+
     start = row["start_rating"]
     summary = stats.summarise(games, start)
     if full:
         messages = render.render_mystatsfull(player.username, player.site, month, summary, stats.records(games), stats.splits(games, start))
     else:
         tables = stats.opening_tables(games)
-        messages = render.render_mystats(player.username, player.site, month, summary, tables, stats.opening_verdicts(tables))
+        messages = render.render_mystats(player.username, player.site, month, summary, tables, stats.opening_verdicts(tables),
+                                         analysis_text=analysis_text)
     for message in messages:
         await ctx.send(message)
 
@@ -530,6 +545,65 @@ async def closemonth(ctx):
         await _tick(ctx)
     else:
         await _react(ctx, "❌")  # the failure notice has already been posted
+
+
+@bot.command(name="lastgame")
+async def lastgame(ctx, username: Optional[str] = None, site: Optional[str] = None):
+    """The bot's analysis of a player's most recent analysed game: both sides, with a link. Reads only what the bot
+    already holds, so it makes no calls to the chess sites and needs no cooldown."""
+    player = await _pick_player(ctx, username, site, "lastgame")
+    if player is None:
+        return
+    games = await asyncio.to_thread(analysis_reports.player_games, player.site, player.username, 1)
+    waiting = await asyncio.to_thread(analysis_reports.waiting_count, player.site, player.username)
+    if not games:
+        if waiting:
+            await ctx.send(f"None of {player.username}'s games have been analysed yet ({waiting} waiting).")
+        elif not settings.ANALYSIS_ENABLED:
+            await ctx.send("Game analysis isn't switched on yet.")
+        else:
+            await ctx.send(f"No analysed games for {player.username} yet: analysis covers games from when it was switched on.")
+        return
+    await ctx.send(render_analysis.render_lastgame(player.username, player.site, games[0], waiting))
+
+
+@bot.command(name="analysisq", aliases=["analysisqueue"])
+@commands.check(_admin_only)
+async def analysisq(ctx):
+    """Admins only: how the analysis queue stands, and whether the worker is asking for work."""
+    status = await asyncio.to_thread(analysis_queue.status, int(datetime.now(timezone.utc).timestamp()))
+    await ctx.send(render_analysis.render_queue_status(status, settings.ANALYSIS_ENABLED))
+
+
+_queuemonth_lock = asyncio.Lock()
+
+
+@bot.command(name="queuemonth")
+@commands.check(_admin_only)
+async def queuemonth(ctx):
+    """Admins only: put this month's games so far, for every registered player, in the analysis queue.
+
+    The refresher only queues games it sees from now on, so this catches up the month's earlier games. It fetches each
+    player's month from their site, one player at a time, so it can take a few minutes. Safe to run again."""
+    if not settings.ANALYSIS_ENABLED:
+        await _reject(ctx, "analysis is switched off (`ANALYSIS_ENABLED`)")
+        return
+    if _queuemonth_lock.locked():
+        await _reject(ctx, "it's already running - wait for it to finish")
+        return
+    async with _queuemonth_lock:
+        async with ctx.typing():
+            result = await analysis_feed.backfill(sources.current_month(), datetime.now(timezone.utc))
+    outcome = result.outcome
+    queued = outcome[analysis_queue.QUEUED] + outcome[analysis_queue.QUEUED_LOW]
+    text = (f"Queued {queued} game(s) from {result.players} player(s) for analysis "
+            f"({outcome[analysis_queue.ALREADY_QUEUED]} were already queued, {outcome[analysis_queue.OVER_LIMIT]} over the monthly limit).")
+    if result.failures:
+        text += "\nCouldn't do: " + "; ".join(f"{name} ({site}): {sources.shorten(why, 80)}" for name, site, why in result.failures)
+    log.info("!queuemonth by %s: %s", ctx.author.id, dict(outcome))
+    await ctx.send(text)
+    if not result.failures:
+        await _tick(ctx)
 
 
 @bot.command()

@@ -60,3 +60,10 @@ def records(site, username, games):
     """(records, how many games had no usable id and were left out)."""
     made = [record(site, username, g) for g in games]
     return [r for r in made if r is not None], made.count(None)
+
+
+def game_url(site, game_id):
+    """The address of a game on its site, from the id game_id() found."""
+    if site == "lichess":
+        return f"https://lichess.org/{game_id}"
+    return f"https://www.chess.com/game/{game_id}"

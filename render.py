@@ -246,12 +246,15 @@ def verdict_line(v):
     )
 
 
-def render_mystats(username, site, month, results, openings, verdicts=None):
+def render_mystats(username, site, month, results, openings, verdicts=None, analysis_text=None):
     """The default summary: the results block, then opening tables as White and Black.
 
-    `verdicts` (stats.opening_verdicts) adds a best and worst opening line under each table.
+    `verdicts` (stats.opening_verdicts) adds a best and worst opening line under each table, and `analysis_text`
+    (render_analysis.mystats_part) is put in after the results block.
     """
     parts = [f"{_player_title(username, site, month, False)}\n```\n{results_block(results)}\n```"]
+    if analysis_text:
+        parts.append(analysis_text)
     if results.games == 0:
         parts.append("No rated blitz games yet this month.")
         return _pack(parts)

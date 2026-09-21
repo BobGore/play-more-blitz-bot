@@ -17,8 +17,11 @@ list of registered players and each month's totals.
 | `!results` | Anyone | This month so far for everyone registered: games, record, rating gain, 100GOB progress. |
 | `!100gob [username] [site]` | Whoever added the account, or an admin | Joins this month's 100GOB challenge. |
 | `!100gobnext [username] [site]` | Whoever added the account, or an admin | Signs up for next month's challenge. |
-| `!mystats [username] [site]` (also `!stats`) | Anyone | One player's results, opening tables and best and worst opening. No name means your own account. |
+| `!mystats [username] [site]` (also `!stats`) | Anyone | One player's results, opening tables and best and worst opening, and, when their games have been analysed, an analysis block (accuracy by phase, average centipawn loss, mistakes per game). No name means your own account. |
 | `!mystatsfull [username] [site]` (also `!statsfull`) | Anyone | Their records and splits by opponent rating, colour, weekday and time of day. |
+| `!lastgame [username] [site]` | Anyone | The bot's analysis of a player's most recent analysed game, for both sides: result, rating change, inaccuracies, mistakes, blunders, average centipawn loss, accuracy overall and by phase, with a link to the game. Reads only what the bot already holds. Needs game analysis switched on. |
+| `!analysisq` (also `!analysisqueue`) | Admins only | How the analysis queue stands (waiting, done, skipped, failed), how long the oldest game has waited, and when the worker last asked for work. Silent for everyone else. |
+| `!queuemonth` | Admins only | Puts this month's games so far, for every registered player, in the analysis queue (the refresher only sees games from when analysis was switched on). Can take a few minutes; safe to run again. |
 | `!closemonth` | Admins only | Closes any finished month that is still open and posts its final table. Silent for everyone else. |
 | `!helpblitzbot` | Anyone | The command list. |
 
