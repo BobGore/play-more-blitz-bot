@@ -42,7 +42,7 @@ _MONTH = re.compile(r"^[0-9]{4}-[0-9]{2}$")
 
 SETTING_NAMES = ("GATEWAY_TARGET", "GATEWAY_KEY", "STOCKFISH_PATH", "ENGINE_THREADS", "ENGINE_HASH_MB", "NODES_PER_POSITION",
                  "SECONDS_PER_POSITION_LIMIT", "BATCH_SIZE", "IDLE_SLEEP_SECONDS", "MIN_PLIES", "LICHESS_MIN_INTERVAL_SECONDS",
-                 "REQUEST_TIMEOUT_SECONDS", "CONTACT")
+                 "REQUEST_TIMEOUT_SECONDS", "CONTACT", "GATEWAY_KNOWN_HOSTS", "LOG_FILE")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,6 +60,8 @@ class Config:
     lichess_interval: float = 2.0
     request_timeout: float = 30.0
     contact: str = ""
+    known_hosts: str = ""  # a known_hosts file for ssh to use; needed when the worker runs as a service under another account
+    log_file: str = ""  # where to write the log; empty for the screen only
 
 
 class ConfigError(Exception):
@@ -101,6 +103,8 @@ def load_config(env):
         lichess_interval=_number(env, "LICHESS_MIN_INTERVAL_SECONDS", 2.0, float, 0.0),
         request_timeout=_number(env, "REQUEST_TIMEOUT_SECONDS", 30.0, float, 1.0),
         contact=(env.get("CONTACT") or "").strip(),
+        known_hosts=(env.get("GATEWAY_KNOWN_HOSTS") or "").strip(),
+        log_file=(env.get("LOG_FILE") or "").strip(),
     )
 
 
@@ -119,9 +123,12 @@ class Gateway:
 
     MAX_BODY = 60_000  # characters of request body per call; bigger batches of results are sent in several calls
 
-    def __init__(self, target, key, runner=subprocess.run, timeout=120):
+    def __init__(self, target, key, runner=subprocess.run, timeout=120, known_hosts=""):
         self.command = ["ssh", "-i", key, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=15",
-                        "-o", "StrictHostKeyChecking=accept-new", target]
+                        "-o", "StrictHostKeyChecking=accept-new"]
+        if known_hosts:
+            self.command += ["-o", f"UserKnownHostsFile={known_hosts}"]
+        self.command.append(target)
         self.runner, self.timeout = runner, timeout
 
     def _call(self, request, body=None):
@@ -477,13 +484,21 @@ def serve(gateway, http, engine, config, *, once=False, sleep=time.sleep, stop=l
 
 # --- starting up ------------------------------------------------------------------------------------------------------------------
 
+def setup_logging(log_file=""):
+    """Log to the screen, and also to `log_file` (rotated at 2 MB, three old files kept) if one is given."""
+    import logging.handlers
+    handlers = [logging.StreamHandler()]
+    if log_file:
+        handlers.append(logging.handlers.RotatingFileHandler(log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8"))
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers, force=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="PlayMoreBlitz analysis worker")
     parser.add_argument("--config", default=str(Path(__file__).with_name("worker.env")), help="the settings file")
     parser.add_argument("--once", action="store_true", help="stop when the queue is empty")
     parser.add_argument("--check", action="store_true", help="test the connection and the engine, then stop")
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     env = dict(os.environ)
     worker_gateway.load_env_file(args.config, env, names=SETTING_NAMES)
     try:
@@ -491,7 +506,8 @@ def main(argv=None):
     except ConfigError as why:
         print(f"Settings problem: {why}", file=sys.stderr)
         return 2
-    gateway = Gateway(config.gateway_target, config.gateway_key)
+    setup_logging(config.log_file)
+    gateway = Gateway(config.gateway_target, config.gateway_key, known_hosts=config.known_hosts)
     http = Http(config.contact, config.request_timeout, config.lichess_interval)
     engine = Engine(config.stockfish_path, config.engine_threads, config.engine_hash_mb, config.nodes, config.position_seconds)
     try:
@@ -504,7 +520,7 @@ def main(argv=None):
             return 0
         serve(gateway, http, engine, config, once=args.once)
     except GatewayError as why:
-        print(f"Problem: {why}", file=sys.stderr)
+        log.error("Problem: %s", why)  # to the log file too, for a worker that runs as a service with no screen
         return 1
     except KeyboardInterrupt:
         log.info("stopped")

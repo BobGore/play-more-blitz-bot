@@ -713,3 +713,58 @@ def test_the_same_archive_asked_for_in_different_capitals_is_fetched_once():
 def test_a_failed_ssh_is_an_error_even_if_it_printed_something_that_looks_like_an_answer():
     with pytest.raises(w.GatewayError):
         gateway(Runner("[]\n", returncode=255, stderr="Connection closed")).hello()
+
+
+# --- running as a service ------------------------------------------------------------------------------------------------------
+
+def test_a_known_hosts_file_is_passed_to_ssh_only_when_one_is_set():
+    plain = w.Gateway("user@host", "/k")
+    assert not any(part.startswith("UserKnownHostsFile") for part in plain.command) and plain.command[-1] == "user@host"
+    custom = w.Gateway("user@host", "/k", known_hosts="/somewhere/known_hosts")
+    assert "UserKnownHostsFile=/somewhere/known_hosts" in custom.command and custom.command[-1] == "user@host"
+    assert custom.command[custom.command.index("UserKnownHostsFile=/somewhere/known_hosts") - 1] == "-o"
+
+
+def test_the_service_settings_are_read():
+    c = w.load_config({**GOOD, "GATEWAY_KNOWN_HOSTS": " /kh ", "LOG_FILE": "/logs/worker.log"})
+    assert (c.known_hosts, c.log_file) == ("/kh", "/logs/worker.log")
+    assert (w.load_config(GOOD).known_hosts, w.load_config(GOOD).log_file) == ("", "")
+    assert {"GATEWAY_KNOWN_HOSTS", "LOG_FILE"} <= set(w.SETTING_NAMES)
+
+
+def test_logging_goes_to_the_file_when_one_is_given(tmp_path):
+    root = logging.getLogger()
+    saved = root.handlers[:], root.level
+    try:
+        w.setup_logging(str(tmp_path / "worker.log"))
+        logging.getLogger("playmoreblitz.worker").info("hello from the worker")
+        for handler in root.handlers:
+            handler.flush()
+        assert "hello from the worker" in (tmp_path / "worker.log").read_text(encoding="utf-8")
+        w.setup_logging("")
+        assert len(root.handlers) == 1
+    finally:
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+            handler.close()
+        root.handlers[:] = saved[0]
+        root.setLevel(saved[1])
+
+
+def test_main_wires_the_service_settings_through(monkeypatch, tmp_path, capsys):
+    seen = {}
+
+    class Spy(w.Gateway):
+        def __init__(self, target, key, **kwargs):
+            seen.update(kwargs)
+            super().__init__(target, key, **kwargs)
+
+        def hello(self):
+            raise w.GatewayError("stop here")
+
+    monkeypatch.setattr(w, "Gateway", Spy)
+    monkeypatch.setattr(w, "setup_logging", lambda path="": seen.update(log=path))
+    path = tmp_path / "worker.env"
+    path.write_text("GATEWAY_TARGET=u@h\nGATEWAY_KEY=/k\nSTOCKFISH_PATH=/sf\nGATEWAY_KNOWN_HOSTS=/kh\nLOG_FILE=/l.log\n", encoding="utf-8")
+    assert w.main(["--config", str(path), "--check"]) == 1
+    assert seen["known_hosts"] == "/kh" and seen["log"] == "/l.log"

@@ -176,6 +176,36 @@ site, analyses it in memory and sends back only the figures; the moves are never
    analyses everything in the queue and stops. `python worker.py` keeps running and looks for new games every
    `IDLE_SLEEP_SECONDS`.
 
+**Keeping the worker running on Windows.** Run it as a scheduled task that starts with the machine, so it needs no
+one to be logged in. The task runs as the SYSTEM account, which has its own home, so give it its own copy of the key and
+of `known_hosts` in a folder only SYSTEM and Administrators can read (ssh refuses a key that others can read), and
+point `worker.env` at them, with a log file:
+
+```
+GATEWAY_KEY=C:/ProgramData/pmb-worker/pmb_worker
+GATEWAY_KNOWN_HOSTS=C:/ProgramData/pmb-worker/known_hosts
+LOG_FILE=C:/ProgramData/pmb-worker/worker.log
+```
+
+```
+icacls C:\ProgramData\pmb-worker\pmb_worker /inheritance:r /grant SYSTEM:F /grant Administrators:F
+icacls C:\ProgramData\pmb-worker\pmb_worker /setowner SYSTEM
+```
+
+Then, in an administrator PowerShell (adjust the two paths):
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "C:\path\to\python.exe" -Argument "C:\path\to\worker.py"
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName PlayMoreBlitzWorker -Action $action -Trigger $trigger -Settings $settings -User SYSTEM -RunLevel Limited
+Start-ScheduledTask -TaskName PlayMoreBlitzWorker
+```
+
+The worker's log says whether it connected (`connected to the bot's machine`) and lists each game it analyses. It
+starts Stockfish at below-normal priority so the machine stays usable.
+
 The worker only ever asks the bot for games, so it works whenever the two machines can reach each other; if the
 worker is off, games simply wait in the queue. On Windows the worker passes its input and output to `ssh` through
 temporary files, because Windows' `ssh.exe` stops responding when another program gives it a pipe.
