@@ -21,6 +21,7 @@ list of registered players and each month's totals.
 | `!mystats [username] [site] [month]` (also `!stats`) | Anyone | One player's results, opening tables and best and worst opening, and, when their games have been analysed, an analysis block (accuracy by phase, average centipawn loss, mistakes per game). No name means your own account. |
 | `!mystatsfull [username] [site] [month]` (also `!statsfull`) | Anyone | Their records and splits by opponent rating, colour, weekday and time of day. |
 | `!lastgame [username] [site]` | Anyone | The bot's analysis of a player's most recent analysed game, for both sides: result, rating change, inaccuracies, mistakes, blunders, average centipawn loss, accuracy overall and by phase, with a link to the game. Reads only what the bot already holds. Needs game analysis switched on. |
+| `!obit [game link or id]` | Anyone, for their own games | A private review of one of your own games by direct message, in Nate Solon's OBIT order: Openings (name, accuracy by phase, the engine's score after 10 moves), Blunders (your worst moments with links to the position before each, on Lichess), Interesting (a lost-on-time flag, a win thrown away or saved, chances your opponent gave you) and a prompt for your Takeaway. No link means your latest game. A Lichess or Chess.com link works, or a bare id. If the game isn't analysed yet it goes to the front of the queue and the review follows by DM. Only games played by an account you registered; the channel only sees a tick. Looks on the sites once if the game hasn't been seen yet, so it carries the cooldown. Needs game analysis switched on. |
 | `!analysisq` (also `!analysisqueue`) | Admins only | How the analysis queue stands (waiting, done, skipped, failed), how long the oldest game has waited, and when the worker last asked for work. Silent for everyone else. |
 | `!queuemonth` | Admins only | Puts this month's games so far, for every registered player, in the analysis queue (the refresher only sees games from when analysis was switched on). Can take a few minutes; safe to run again. |
 | `!closemonth` | Admins only | Closes any finished month that is still open and posts its final table. Silent for everyone else. |
@@ -243,6 +244,10 @@ figures for both sides (accuracy overall and by phase, inaccuracies, mistakes, b
 packed list of the evaluation after each move, and the ply numbers of the moves called inaccuracies, mistakes and
 blunders with how much each cost (numbers only, so the game can be opened at that position from its link). The moves
 themselves are never stored.
+
+A `!obit` request is kept only until it is answered: the Discord user ID of whoever asked, the game, their account
+and the channel they asked in, so the review can be sent when the analysis finishes. The review itself is sent by
+direct message and not stored, and a request the bot cannot answer within a day is dropped.
 
 ## Development
 

@@ -7,6 +7,7 @@ Commands so far: !add, !remove, !results and a help command. The rest come in la
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -23,9 +24,11 @@ import announce
 import gamecache
 import monthargs
 import monthend
+import obit
 import refresh
 import render
 import render_analysis
+import render_obit
 import settings
 import singleton
 import sources
@@ -64,6 +67,7 @@ USAGE = {
     "mystatsfull": "!mystatsfull [username] [site] [month]",
     "history": "!history [username] [site]",
     "lastgame": "!lastgame [username] [site]",
+    "obit": "!obit [game link or id]",
 }
 
 intents = discord.Intents.default()
@@ -182,6 +186,19 @@ async def daily_posts():
             log.exception("scheduled post %s crashed", post.__name__)
 
 
+@tasks.loop(seconds=60)
+async def obit_loop():
+    """Send the reviews people asked for once their games have been analysed (or say that they can't be)."""
+    try:
+        for request in await asyncio.to_thread(obit.outstanding):
+            try:
+                await _process_obit(request)
+            except Exception:  # one bad request must not hold up the rest
+                log.exception("could not answer the !obit request for %s %s", request["site"], request["game_id"])
+    except Exception:
+        log.exception("!obit delivery crashed")
+
+
 _background = set()  # keeps a reference to running tasks so they aren't garbage collected
 
 
@@ -215,6 +232,8 @@ async def on_ready():
         log.warning(problem)
     if not refresh_loop.is_running():  # on_ready can fire again after a reconnect
         refresh_loop.start()
+    if not obit_loop.is_running():
+        obit_loop.start()
     if not daily_posts.is_running():
         daily_posts.start()
         try:
@@ -283,6 +302,8 @@ async def help_blitz_bot(ctx):
         "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
         "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB\n"
         "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
+        "`!obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), sent "
+        "by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue\n"
     )
 
 
@@ -621,6 +642,118 @@ async def lastgame(ctx, username: Optional[str] = None, site: Optional[str] = No
             await ctx.send(f"No analysed games for {player.username} yet: analysis covers games from when it was switched on.")
         return
     await ctx.send(render_analysis.render_lastgame(player.username, player.site, games[0], waiting))
+
+
+async def _dm(user_id, messages):
+    """Send `messages` to the user privately. Raises discord.Forbidden if they don't accept messages from the bot."""
+    user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+    for message in messages:
+        await user.send(message)
+
+
+async def _process_obit(request, *, tell_channel=True):
+    """Send, hold or close one !obit request. Returns "sent", "waiting", "no_dm" (they don't accept DMs from the bot) or
+    "closed" (given up on, or answered already). Whoever removes the request from the table is the one that answers it."""
+    row = await asyncio.to_thread(obit.game_row, request["site"], request["game_id"])
+    action = obit.action_for(request, row, int(time.time()))
+    if action == obit.WAIT:
+        return "waiting"
+    if not await asyncio.to_thread(obit.close_request, request["user_id"], request["site"], request["game_id"]):
+        return "closed"
+    try:
+        if action == obit.SEND:
+            side = obit.side_of(row, request["username"])
+            messages = render_obit.render_obit(request["username"], request["site"], row, side)
+        elif action == obit.CANT:
+            messages = [f"I couldn't review that game: {obit.cant_reason(row)}."]
+        else:
+            messages = ["I couldn't get to that game's review in time (the analysis is behind). Ask again in a while."]
+        await _dm(request["user_id"], messages)
+    except discord.Forbidden:
+        if tell_channel:
+            await _say_no_dm(request["channel_id"], request["user_id"])
+        return "no_dm"
+    except discord.HTTPException:
+        log.exception("couldn't send an !obit DM; will try again")
+        await asyncio.to_thread(obit.add_request, request["user_id"], request["site"], request["game_id"], request["username"],
+                                request["channel_id"], request["requested_at"])
+        return "waiting"
+    return "sent" if action == obit.SEND else "closed"
+
+
+NO_DM = ("I couldn't send you a direct message. Allow direct messages from server members "
+         "(server name > Privacy Settings), then ask again.")
+
+
+async def _say_no_dm(channel_id, user_id):
+    channel = bot.get_channel(channel_id) if channel_id else None
+    if channel is not None:
+        try:
+            await channel.send(f"<@{user_id}> {NO_DM}", allowed_mentions=discord.AllowedMentions(users=[discord.Object(id=user_id)]))
+        except discord.HTTPException as exc:
+            log.warning("couldn't tell %s in channel %s that their DMs are closed (%s)", user_id, channel_id, exc.status)
+
+
+@bot.command(name="obit")
+@commands.dynamic_cooldown(_cooldown_for, commands.BucketType.user)
+async def obit_command(ctx, game: Optional[str] = None):
+    """A private review of one of your own games, sent by DM. No link or id means your latest game. If the game hasn't
+    been analysed yet it goes to the front of the queue and the review follows when it's done."""
+    if not settings.ANALYSIS_ENABLED:
+        await _reject(ctx, "game analysis isn't switched on yet", refund_cooldown=True)
+        return
+    accounts = await asyncio.to_thread(store.accounts_of, ctx.author.id)
+    if not accounts:
+        await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` first", refund_cooldown=True)
+        return
+    refs = None
+    if game is not None:
+        refs = obit.candidates(game)
+        if not refs:
+            await _reject(ctx, f"I can't read '{sources.shorten(game)}' as a game: give a Lichess or Chess.com game link, or the game's id",
+                          refund_cooldown=True)
+            return
+
+    def look():
+        return obit.find_game(accounts, refs) if refs else obit.latest_game(accounts)
+
+    found = await asyncio.to_thread(look)
+    if found is None:  # a game played a minute ago may not have been seen yet: look on the sites once, then again
+        async with ctx.typing():
+            for account in accounts:
+                await refresh.refresh_one(account.site, account.username)
+        found = await asyncio.to_thread(look)
+    if found is None:
+        await _reject(ctx, "I can't find that among your games. I only hold games played since you registered." if refs
+                      else "I don't hold any games of yours yet.", refund_cooldown=True)
+        return
+    row, account, side = found
+    key = (row["site"], row["game_id"])
+
+    if await asyncio.to_thread(obit.waiting_count, ctx.author.id, key) >= obit.MAX_WAITING:
+        await _reject(ctx, f"you already have {obit.MAX_WAITING} reviews waiting: I'll DM them as they finish", refund_cooldown=True)
+        return
+    outcome = await asyncio.to_thread(analysis_queue.prioritise, *key)
+    if outcome is not None:
+        status, reason = outcome
+        if status == analysis_queue.SKIPPED:
+            await _reject(ctx, f"I couldn't review that game: {obit.SKIP_WORDS.get(reason, 'it was skipped')}.", refund_cooldown=True)
+            return
+    now = int(time.time())
+    await asyncio.to_thread(obit.add_request, ctx.author.id, key[0], key[1], account.username, ctx.channel.id, now)
+    request = {"user_id": ctx.author.id, "site": key[0], "game_id": key[1], "username": account.username,
+               "channel_id": ctx.channel.id, "requested_at": now}
+    result = await _process_obit(request, tell_channel=False)
+    if result == "sent":
+        await _tick(ctx)
+        await ctx.send("I've sent you the review by DM.")
+    elif result == "waiting":
+        await _tick(ctx)
+        await ctx.send("Analysing that game now: it's at the front of the queue. I'll DM you the review when it's done.")
+    elif result == "no_dm":
+        await _reject(ctx, NO_DM)
+    else:
+        await _reject(ctx, "I couldn't review that game")
 
 
 @bot.command(name="analysisq", aliases=["analysisqueue"])

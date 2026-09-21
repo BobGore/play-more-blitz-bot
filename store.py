@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS game_analysis (
 
     status    TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'done', 'skipped', 'failed')),
     skip_reason TEXT,                      -- not_standard_start, over_monthly_limit, unavailable, too_short
-    priority  INTEGER NOT NULL DEFAULT 0,  -- 0 normal, 1 low: a member's games past the full-priority number
+    priority  INTEGER NOT NULL DEFAULT 0,  -- -1 urgent (a member asked for its review), 0 normal, 1 low: a member's games past the full-priority number
     attempts  INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     queued_at INTEGER NOT NULL,
@@ -104,6 +104,17 @@ CREATE INDEX IF NOT EXISTS game_analysis_queue ON game_analysis (status, priorit
 CREATE INDEX IF NOT EXISTS game_analysis_month ON game_analysis (site, month);
 CREATE INDEX IF NOT EXISTS game_analysis_white ON game_analysis (site, white_username, month);
 CREATE INDEX IF NOT EXISTS game_analysis_black ON game_analysis (site, black_username, month);
+
+-- Reviews (!obit) asked for and not yet sent by direct message. A row goes when the review is sent, or given up on.
+CREATE TABLE IF NOT EXISTS obit_requests (
+    user_id      INTEGER NOT NULL,         -- Discord user ID of whoever asked
+    site         TEXT NOT NULL,
+    game_id      TEXT NOT NULL,
+    username     TEXT NOT NULL,            -- their account that played the game
+    channel_id   INTEGER,                  -- where they asked, in case the direct message can't be delivered
+    requested_at INTEGER NOT NULL,         -- UTC epoch seconds
+    PRIMARY KEY (user_id, site, game_id)
+);
 
 -- When each analysis worker last asked for work, so the bot can tell whether one is alive.
 CREATE TABLE IF NOT EXISTS analysis_workers (

@@ -26,7 +26,7 @@ UNAVAILABLE = "unavailable"
 TOO_SHORT = "too_short"
 WORKER_SKIP_REASONS = (NOT_STANDARD_START, UNAVAILABLE, TOO_SHORT)  # the reasons a worker may give for skipping a game
 
-NORMAL, LOW = 0, 1  # priorities
+URGENT, NORMAL, LOW = -1, 0, 1  # priorities; URGENT is a game whose review a member asked for (!obit)
 
 # What queue_games reports about each game it was given.
 QUEUED, QUEUED_LOW, OVER_LIMIT, ALREADY_QUEUED, NOT_A_MEMBER = "queued", "queued_low", "over_limit", "already_queued", "not_a_member"
@@ -284,6 +284,29 @@ def release(worker, site, game_id, *, skip_reason=None, error=None):
         conn.execute("UPDATE game_analysis SET status = ?, skip_reason = ?, last_error = ?, claimed_by = NULL, claimed_at = NULL "
                      "WHERE site = ? AND game_id = ?", (status, reason, (error or "")[:200] or None, site, game_id))
     return True
+
+
+def prioritise(site, game_id):
+    """Move a game to the front of the queue because a member asked for its review (!obit).
+
+    A queued game jumps ahead of the rest. A game skipped only for being over the monthly limit, or one that failed,
+    is queued again: an explicit request overrides the limit. A game already claimed or done, or skipped for a reason
+    that can't change (not_standard_start, unavailable, too_short), is left as it is. Returns (status, skip_reason) as
+    they are afterwards, or None if there is no such game.
+    """
+    with store.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT status, skip_reason FROM game_analysis WHERE site = ? AND game_id = ?", (site, game_id)).fetchone()
+        if row is None:
+            return None
+        state, reason = row["status"], row["skip_reason"]
+        if state == PENDING:
+            conn.execute("UPDATE game_analysis SET priority = ? WHERE site = ? AND game_id = ?", (URGENT, site, game_id))
+        elif state == FAILED or (state == SKIPPED and reason == OVER_MONTHLY_LIMIT):
+            conn.execute("UPDATE game_analysis SET status = ?, skip_reason = NULL, last_error = NULL, attempts = 0, priority = ?, "
+                         "claimed_by = NULL, claimed_at = NULL WHERE site = ? AND game_id = ?", (PENDING, URGENT, site, game_id))
+            state, reason = PENDING, None
+    return state, reason
 
 
 def status(now, method_version=None):
