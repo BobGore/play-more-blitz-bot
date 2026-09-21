@@ -14,7 +14,7 @@ list of registered players and each month's totals.
 | --- | --- | --- |
 | `!add <username> <site> [@member]` | Anyone for their own account; admins can name another member | Registers an account. `<site>` is `chess.com` or `lichess`. The name is checked against the site and stored in the site's own spelling. One account per site each (admins are exempt). |
 | `!remove <username> [site]` | Whoever added it, or an admin | Takes a player off the list. Their history is kept. |
-| `!results` | Anyone | This month so far for everyone registered: games, record, rating gain, 100GOB progress. |
+| `!results` | Anyone | This month so far for everyone registered: games, record, current rating, rating gain, 100GOB progress. |
 | `!100gob [username] [site]` | Whoever added the account, or an admin | Joins this month's 100GOB challenge. |
 | `!100gobnext [username] [site]` | Whoever added the account, or an admin | Signs up for next month's challenge. |
 | `!mystats [username] [site]` (also `!stats`) | Anyone | One player's results, opening tables and best and worst opening, and, when their games have been analysed, an analysis block (accuracy by phase, average centipawn loss, mistakes per game). No name means your own account. |

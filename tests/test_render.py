@@ -64,12 +64,12 @@ def test_the_layout_is_exactly_this():
     assert message == (
         "**September 2026 so far**\n"
         "```\n"
-        "  #  Player         Site   Gm    W-D-L  Gain  Challenge\n"
-        "-------------------------------------------------------\n"
-        "  1  Hot_Streak     LI    104  60-4-40   +77  100GOB ✅\n"
-        "  2  Getting_There  LI     42  20-2-20     0  100GOB 42/100\n"
-        "  3  Chess_Fan_123  CC     28  12-2-14   -18\n"
-        "  4  Quiet_Player   CC      0    0-0-0     0\n"
+        "  #  Player         Site   Gm    W-D-L  Rating  Gain  Challenge\n"
+        "---------------------------------------------------------------\n"
+        "  1  Hot_Streak     LI    104  60-4-40    1477   +77  100GOB ✅\n"
+        "  2  Getting_There  LI     42  20-2-20    1350     0  100GOB 42/100\n"
+        "  3  Chess_Fan_123  CC     28  12-2-14    1448   -18\n"
+        "  4  Quiet_Player   CC      0    0-0-0    1500     0\n"
         "```\n"
         "Updated 25 min ago · CC = Chess.com, LI = Lichess"
     )
@@ -175,7 +175,7 @@ def test_a_final_table_says_final_and_has_no_freshness_line():
     (message,) = render.render_results(rows, "2026-09", NOW, 100, final=True)
     assert message.startswith("**September 2026 final**\n")
     assert "Final results" in message and "Updated" not in message and "so far" not in message
-    assert "120  70-5-45   +60" in message
+    assert "120  70-5-45    1560   +60" in message
 
 
 def test_the_same_rows_without_final_still_read_so_far():
@@ -279,3 +279,28 @@ def test_fit_hard_cuts_a_single_line_longer_than_a_message():
 
 def test_a_single_small_table_is_one_message():
     assert len(render_rows(many(10))) == 1
+
+
+# --- the rating column ---------------------------------------------------------
+
+
+def test_the_rating_column_is_the_current_rating_and_sits_before_the_gain():
+    rows = [row("up", games=3, start=1500, end=1536), row("down", games=2, start=1500, end=1482)]
+    lines = table_lines(render_rows(rows)[0])
+    fields = [line.split() for line in lines]
+    assert [(f[-2], f[-1]) for f in fields] == [("1536", "+36"), ("1482", "-18")]
+    header = render_rows(rows)[0].split("\n")[2]
+    assert header.index("Rating") < header.index("Gain")
+
+
+def test_a_player_with_nothing_counted_yet_has_a_dash_for_the_rating_not_a_made_up_one():
+    rows = [row("fresh", games=0, refreshed=None)]
+    (line,) = table_lines(render_rows(rows)[0])
+    assert line.split()[-3:] == ["-", "-", "-"]          # games, rating and gain are all unknown
+
+
+def test_a_wide_rating_or_a_long_month_still_lines_up():
+    rows = [row("a", games=5, start=999, end=1010), row("b", games=3, start=2800, end=2825)]
+    lines = table_lines(render_rows(rows)[0])
+    ends = {len(line) for line in lines}
+    assert len(ends) == 1

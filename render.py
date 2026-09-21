@@ -94,21 +94,23 @@ def render_results(rows, month, now, target, signups=(), final=False):
     name_w = max(len("Player"), *(len(_name(r.username)) for r in rows))
     games = [str(r.games) if _counted(r) else "-" for r in rows]
     record = [f"{r.wins}-{r.draws}-{r.losses}" if _counted(r) else "-" for r in rows]
+    ratings = [str(r.end_rating) if _counted(r) else "-" for r in rows]
     gains = [_gain(r) for r in rows]
     games_w = max(len("Gm"), *map(len, games))
     record_w = max(len("W-D-L"), *map(len, record))
+    rating_w = max(len("Rating"), *map(len, ratings))
     gain_w = max(len("Gain"), *map(len, gains))
     rank_w = len(str(len(rows)))
 
     header = (
-        f"  {'#':>{rank_w}}  {'Player':<{name_w}}  Site  {'Gm':>{games_w}}  {'W-D-L':>{record_w}}  {'Gain':>{gain_w}}  Challenge"
+        f"  {'#':>{rank_w}}  {'Player':<{name_w}}  Site  {'Gm':>{games_w}}  {'W-D-L':>{record_w}}  {'Rating':>{rating_w}}  {'Gain':>{gain_w}}  Challenge"
     )
     rule = "-" * len(header)
     lines = []
     for i, row in enumerate(rows):
         lines.append(
             f"{_flag(row)} {i + 1:>{rank_w}}  {_name(row.username):<{name_w}}  {SITE_CODES.get(row.site, row.site):<4}"
-            f"  {games[i]:>{games_w}}  {record[i]:>{record_w}}  {gains[i]:>{gain_w}}  {_challenge(row, target)}".rstrip()
+            f"  {games[i]:>{games_w}}  {record[i]:>{record_w}}  {ratings[i]:>{rating_w}}  {gains[i]:>{gain_w}}  {_challenge(row, target)}".rstrip()
         )
 
     footer = _footer(rows, now, final)
