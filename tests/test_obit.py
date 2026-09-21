@@ -21,6 +21,8 @@ import store
 OK, NO = "✅", "❌"
 ALICE, BOB = OWNER, 1002
 CHANNEL = 555
+DM_CHANNEL = 777
+WAITING = "Analysing that game now: it's at the front of the queue. I'll DM you the review when it's done."
 
 
 @pytest.fixture(autouse=True)
@@ -460,8 +462,9 @@ class Typing:
 
 
 def make_ctx(author_id):
-    return SimpleNamespace(author=SimpleNamespace(id=author_id), channel=SimpleNamespace(id=CHANNEL), message=SimpleNamespace(add_reaction=AsyncMock()),
-                           send=AsyncMock(), typing=lambda: Typing(), command=MagicMock())
+    """A direct message to the bot from `author_id` (no guild)."""
+    return SimpleNamespace(author=SimpleNamespace(id=author_id), channel=SimpleNamespace(id=DM_CHANNEL), guild=None,
+                           message=SimpleNamespace(add_reaction=AsyncMock()), send=AsyncMock(), typing=lambda: Typing(), command=MagicMock())
 
 
 def ask(ctx, *args):
@@ -474,6 +477,23 @@ def said(ctx):
 
 def reactions(ctx):
     return [c.args[0] for c in ctx.message.add_reaction.await_args_list]
+
+
+def the_server(*member_ids, error=None, guild_id=1):
+    """A stand-in server whose member lookup finds `member_ids` and otherwise raises `error` (NotFound by default)."""
+    async def fetch_member(user_id):
+        if user_id in member_ids:
+            return SimpleNamespace(id=user_id)
+        raise error or discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "Unknown Member")
+    return SimpleNamespace(id=guild_id, fetch_member=AsyncMock(side_effect=fetch_member))
+
+
+@pytest.fixture(autouse=True)
+def on_the_server(monkeypatch):
+    """The bot sees the blitz channel, in a server that Alice and Bob are members of."""
+    channel = SimpleNamespace(id=CHANNEL, guild=the_server(ALICE, BOB), send=AsyncMock())
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channel if channel_id == CHANNEL else None)
+    return channel
 
 
 @pytest.fixture
@@ -533,8 +553,8 @@ def test_a_game_not_yet_analysed_goes_to_the_front_of_the_queue_and_is_answered_
     q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2, 3)], NOW)
     ctx = make_ctx(ALICE)
     ask(ctx, "00000001")
-    assert reactions(ctx) == ["⏳"] and said(ctx) == []                                     # queued: an hourglass, and the DM follows
-    assert dms == [] and [(r["user_id"], r["game_id"], r["username"], r["channel_id"]) for r in obit.outstanding()] == [(ALICE, "00000001", "alice_example", CHANNEL)]
+    assert reactions(ctx) == ["⏳"] and said(ctx) == [WAITING]                              # queued: an hourglass and a line, and the DM follows
+    assert dms == [] and [(r["user_id"], r["game_id"], r["username"], r["channel_id"]) for r in obit.outstanding()] == [(ALICE, "00000001", "alice_example", DM_CHANNEL)]
     assert [g["game_id"] for g in q.claim("desk", 1, NOW)] == ["00000001"]                 # ahead of the newer games
 
     asyncio.run(botmod._process_obit(obit.outstanding()[0]))                               # still with the worker: nothing yet
@@ -560,7 +580,7 @@ def test_a_game_skipped_for_the_monthly_limit_is_queued_anyway(dms, sites):
     assert reactions(ctx) == ["⏳"] and statuses()["00000001"] == (q.PENDING, q.URGENT, None, 0)
 
 
-def test_a_game_that_cannot_be_analysed_is_refused_with_the_reason_in_text_that_removes_itself(dms, sites):
+def test_a_game_that_cannot_be_analysed_is_refused_with_the_reason(dms, sites):
     register("alice_example")
     q.queue_games([spec(1, "alice_example", "x_example")], NOW)
     q.claim("desk", 1, NOW)
@@ -568,7 +588,7 @@ def test_a_game_that_cannot_be_analysed_is_refused_with_the_reason_in_text_that_
     ctx = make_ctx(ALICE)
     ask(ctx, "00000001")
     assert reactions(ctx) == [NO] and "chess960" in said(ctx)[0] and obit.outstanding() == [] and dms == []
-    assert ctx.send.await_args.kwargs == {"delete_after": 20}
+    assert ctx.send.await_args.kwargs == {}                                                # private: the text stays
 
 
 def test_someone_elses_game_is_refused_and_nothing_is_queued_or_sent(dms, sites):
@@ -588,7 +608,7 @@ def test_a_game_not_seen_yet_is_looked_for_on_the_sites_once_and_then_answered(d
     ctx = make_ctx(ALICE)
     ask(ctx)
     assert sites.calls == [("chess.com", "alice_cc"), ("lichess", "alice_example")]                # both accounts, once each
-    assert reactions(ctx) == ["⏳"] and said(ctx) == []
+    assert reactions(ctx) == ["⏳"] and said(ctx) == [WAITING]
 
 
 def test_when_the_sites_have_nothing_either_it_says_so_and_looks_again_only_after_a_couple_of_minutes(dms, sites, monkeypatch):
@@ -775,7 +795,8 @@ def test_the_command_has_a_usage_line_no_cooldown_of_its_own_and_help_mentions_b
     assert botmod.obit_command._buckets._cooldown is None                                   # the throttle on looking at the sites replaces it
     ctx = make_ctx(ALICE)
     asyncio.run(botmod.help_blitz_bot.callback(ctx))
-    assert "`/obit [game link or id]` (or `!obit`)" in said(ctx)[0] and "leaves nothing in the channel" in said(ctx)[0] and len(said(ctx)[0]) < 2000
+    text = said(ctx)[0]
+    assert "`/obit [game link or id]`" in text and "Or send me `!obit` in a direct message" in text and "Registered members on the server only" in text and len(text) < 2000
 
 
 def statuses():
@@ -802,6 +823,7 @@ def test_the_delivery_loop_is_started_with_the_bot(monkeypatch):
         monkeypatch.setattr(loop, "is_running", lambda: False)
         monkeypatch.setattr(loop, "start", lambda name=name: started.append(name))
     monkeypatch.setattr(botmod, "post_signup_call_if_due", AsyncMock())
+    monkeypatch.setattr(botmod, "sync_slash_commands", AsyncMock())
     asyncio.run(botmod.on_ready())
     assert "obit_loop" in started
     assert botmod.obit_loop.seconds == 60
@@ -812,6 +834,7 @@ def test_the_delivery_loop_is_not_started_twice(monkeypatch):
     for name in ("obit_loop", "refresh_loop", "daily_posts"):
         monkeypatch.setattr(getattr(botmod, name), "is_running", lambda: True)
         monkeypatch.setattr(getattr(botmod, name), "start", lambda name=name: started.append(name))
+    monkeypatch.setattr(botmod, "sync_slash_commands", AsyncMock())
     asyncio.run(botmod.on_ready())
     assert started == []
 
@@ -876,6 +899,7 @@ def test_the_delete_button_is_registered_when_the_bot_starts(monkeypatch):
     for name in ("obit_loop", "refresh_loop", "daily_posts"):
         monkeypatch.setattr(getattr(botmod, name), "is_running", lambda: True)
     monkeypatch.setattr(botmod.bot, "add_view", lambda view: added.append(view))
+    monkeypatch.setattr(botmod, "sync_slash_commands", AsyncMock())
     asyncio.run(botmod.on_ready())
     assert len(added) == 1 and isinstance(added[0], botmod.DeleteButton)
 
@@ -1091,3 +1115,129 @@ def test_a_queued_slash_request_remembers_the_channel_it_came_from(dms, sites):
     q.queue_games([spec(1, "alice_example", "x_example")], NOW)
     slash(make_interaction(), "00000001")
     assert obit.outstanding()[0]["channel_id"] == CHANNEL
+
+
+# --- !obit only in a direct message, only for registered members who are on the server -----------------------------------------------
+
+def in_the_channel(ctx):
+    ctx.guild = SimpleNamespace(id=1)
+    ctx.channel = SimpleNamespace(id=CHANNEL)
+    return ctx
+
+
+def test_in_the_channel_obit_only_points_to_slash_and_dms_and_the_hint_removes_itself(dms, sites):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    ctx = in_the_channel(make_ctx(ALICE))
+    ask(ctx, "00000001")
+    ctx.send.assert_awaited_once_with(botmod.OBIT_HINT, delete_after=20)
+    assert "/obit" in botmod.OBIT_HINT and "direct message" in botmod.OBIT_HINT
+    assert dms == [] and sites.calls == [] and obit.outstanding() == [] and reactions(ctx) == []          # nothing was looked at, sent or queued
+
+
+def test_a_failure_to_post_the_hint_is_survived(dms, sites):
+    ctx = in_the_channel(make_ctx(ALICE))
+    ctx.send = AsyncMock(side_effect=discord.HTTPException(SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions"))
+    ask(ctx)
+    assert dms == []
+
+
+def test_the_channel_check_lets_a_direct_message_through_for_obit_only():
+    async def allowed(guild, channel_id, command):
+        ctx = SimpleNamespace(guild=guild, channel=SimpleNamespace(id=channel_id), command=SimpleNamespace(name=command) if command else None)
+        return await botmod._in_allowed_channel(ctx)
+    assert asyncio.run(allowed(None, DM_CHANNEL, "obit")) is True
+    assert asyncio.run(allowed(None, DM_CHANNEL, "results")) is False and asyncio.run(allowed(None, DM_CHANNEL, "add")) is False
+    assert asyncio.run(allowed(None, DM_CHANNEL, "closemonth")) is False and asyncio.run(allowed(None, DM_CHANNEL, None)) is False
+    assert asyncio.run(allowed(SimpleNamespace(id=1), CHANNEL, "results")) is True                       # a server channel: as before
+    assert asyncio.run(allowed(SimpleNamespace(id=1), CHANNEL + 5, "obit")) is False
+
+
+def test_a_dm_from_someone_who_is_not_on_the_server_is_refused_and_nothing_happens(dms, sites, on_the_server):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    on_the_server.guild = the_server(BOB)                                                    # Alice has left
+    ctx = make_ctx(ALICE)
+    ask(ctx, "00000001")
+    assert reactions(ctx) == [NO] and said(ctx) == ["This is only for members of the server."]
+    assert dms == [] and sites.calls == [] and obit.outstanding() == []
+
+
+def test_a_dm_is_refused_when_membership_cannot_be_confirmed(dms, sites, on_the_server):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    on_the_server.guild = the_server(error=discord.HTTPException(SimpleNamespace(status=500, reason="oops"), "server error"))
+    ctx = make_ctx(ALICE)
+    ask(ctx, "00000001")
+    assert reactions(ctx) == [NO] and said(ctx) == ["I couldn't check that you're on the server just now: try again in a moment."]
+    assert dms == [] and obit.outstanding() == []
+
+
+def test_a_dm_is_refused_when_the_bot_cannot_see_the_server_at_all(dms, sites, monkeypatch):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: None)
+    ctx = make_ctx(ALICE)
+    ask(ctx, "00000001")
+    assert reactions(ctx) == [NO] and "couldn't check" in said(ctx)[0] and dms == []
+
+
+def test_membership_of_any_server_the_bot_serves_is_enough(monkeypatch):
+    first, second = the_server(guild_id=1), the_server(ALICE, guild_id=2)
+    channels = {CHANNEL: SimpleNamespace(guild=first), CHANNEL + 1: SimpleNamespace(guild=second)}
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", set(channels))
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channels.get(channel_id))
+    assert asyncio.run(botmod._member_status(ALICE)) is True and asyncio.run(botmod._member_status(BOB)) is False
+
+
+def test_a_failed_lookup_in_one_server_does_not_hide_membership_of_another_but_does_hide_absence(monkeypatch):
+    broken = the_server(error=discord.HTTPException(SimpleNamespace(status=500, reason="oops"), "x"), guild_id=1)
+    member_of = the_server(ALICE, guild_id=2)
+    channels = {CHANNEL: SimpleNamespace(guild=broken), CHANNEL + 1: SimpleNamespace(guild=member_of)}
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", set(channels))
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channels.get(channel_id))
+    assert asyncio.run(botmod._member_status(ALICE)) is True
+    assert asyncio.run(botmod._member_status(BOB)) is None                                   # can't tell: not "absent"
+
+
+def test_a_dm_needs_a_registered_account_even_for_a_member(dms, sites):
+    ctx = make_ctx(ALICE)                                                                   # on the server, not registered
+    ask(ctx)
+    assert reactions(ctx) == [NO] and "haven't added an account" in said(ctx)[0] and "in the server's channel" in said(ctx)[0]
+    assert dms == [] and sites.calls == []
+
+
+def test_a_dm_gets_its_review_in_the_same_conversation_with_a_tick(dms, sites):
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    ctx = make_ctx(ALICE)
+    ask(ctx, "00000001")
+    assert reactions(ctx) == [OK] and said(ctx) == [] and [u for u, _ in dms] == [ALICE]
+
+
+def test_a_review_waiting_for_someone_who_asked_by_dm_is_dropped_once_they_leave_the_server(dms, sites, on_the_server):
+    register("alice_example")
+    q.queue_games([spec(1, "alice_example", "x_example")], NOW)
+    ask(make_ctx(ALICE), "00000001")                                                        # queued from a DM (channel id is the DM's)
+    assert obit.outstanding()[0]["channel_id"] == DM_CHANNEL
+    analysed_now(1)
+    on_the_server.guild = the_server(BOB)                                                    # Alice leaves while it waits
+    asyncio.run(botmod.obit_loop.coro())
+    assert dms == [] and obit.outstanding() == []
+
+
+def test_a_review_waiting_for_someone_who_asked_by_dm_is_sent_while_they_are_still_members(dms, sites):
+    register("alice_example")
+    q.queue_games([spec(1, "alice_example", "x_example")], NOW)
+    ask(make_ctx(ALICE), "00000001")
+    analysed_now(1)
+    asyncio.run(botmod.obit_loop.coro())
+    assert [u for u, _ in dms] == [ALICE] and obit.outstanding() == []
+
+
+def analysed_now(n):
+    """Give the queued game n its analysis result."""
+    q.claim("desk", 10, NOW)
+    q.submit("desk", [{"site": "lichess", "game_id": f"{n:08d}", "method_version": analysis.METHOD_VERSION, "engine": "Stockfish 19", "nodes": 200_000,
+                       "plies": 40, "middle_ply": 14, "end_ply": None, "eval_ply20": 10, "evals": curve(0), "white": side(), "black": side(),
+                       "moments": moments_for(side(), side())}], NOW + 5)

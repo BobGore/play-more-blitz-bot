@@ -248,7 +248,14 @@ async def on_ready():
 
 
 @bot.check
+def _in_dm(ctx):
+    """True for a direct message to the bot (a message in a server has a guild; a test context with none isn't a DM)."""
+    return getattr(ctx, "guild", False) is None
+
+
 async def _in_allowed_channel(ctx):
+    if _in_dm(ctx):  # a direct message: only !obit, which checks for itself that the person is on the server
+        return ctx.command is not None and ctx.command.name == "obit"
     return ctx.channel.id in ALLOWED_CHANNEL_IDS
 
 
@@ -307,9 +314,9 @@ async def help_blitz_bot(ctx):
         "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
         "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB\n"
         "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
-        "`/obit [game link or id]` (or `!obit`) - a private review of one of your own games (Openings, Blunders, Interesting, "
-        "Takeaway), sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. `/obit` leaves "
-        "nothing in the channel\n"
+        "`/obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), "
+        "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Nothing appears in the "
+        "channel. Or send me `!obit` in a direct message. Registered members on the server only\n"
     )
 
 
@@ -724,6 +731,35 @@ class DeleteButton(discord.ui.View):
             log.warning("couldn't delete a DM on request (%s)", exc.status)
 
 
+def _home_guilds():
+    """The servers the bot serves: those with an allowed channel it can see."""
+    guilds = {}
+    for channel_id in ALLOWED_CHANNEL_IDS:
+        guild = getattr(bot.get_channel(channel_id), "guild", None)
+        if guild is not None:
+            guilds[guild.id] = guild
+    return list(guilds.values())
+
+
+async def _member_status(user_id):
+    """True if `user_id` is a member of a server the bot serves, False if they are a member of none, None if that can't be
+    told (the bot can't see a server, or the lookup failed)."""
+    guilds = _home_guilds()
+    if not guilds:
+        return None
+    unknown = False
+    for guild in guilds:
+        try:
+            await guild.fetch_member(user_id)
+            return True
+        except discord.NotFound:
+            continue
+        except discord.HTTPException as exc:
+            log.warning("couldn't check whether %s is in server %s (%s)", user_id, guild.id, exc.status)
+            unknown = True
+    return None if unknown else False
+
+
 async def _dm(user_id, messages):
     """Send `messages` to the user privately, each with a Delete button. Raises discord.Forbidden if they don't accept
     messages from the bot."""
@@ -746,11 +782,9 @@ async def _process_obit(request, *, immediate=False):
         return "waiting"
     if not await asyncio.to_thread(obit.close_request, request["user_id"], request["site"], request["game_id"]):
         return "closed"
-    if not immediate:
-        channel = bot.get_channel(request["channel_id"]) if request["channel_id"] else None
-        if not await _on_server(getattr(channel, "guild", None), request["user_id"]):
-            log.info("dropped the !obit request of %s: they are no longer on the server", request["user_id"])
-            return "closed"
+    if not immediate and await _member_status(request["user_id"]) is False:
+        log.info("dropped the !obit request of %s: they are no longer on the server", request["user_id"])
+        return "closed"
     try:
         if action == obit.SEND:
             side = obit.side_of(row, request["username"])
@@ -802,7 +836,7 @@ async def _obit_flow(user_id, channel_id, game, *, typing=None):
         return "error", "game analysis isn't switched on yet"
     accounts = await asyncio.to_thread(store.accounts_of, user_id)
     if not accounts:
-        return "error", "you haven't added an account yet - use `!add <username> <site>` first"
+        return "error", "you haven't added an account yet - use `!add <username> <site>` in the server's channel first"
     refs = None
     if game is not None:
         refs = obit.candidates(game)
@@ -861,20 +895,35 @@ async def _obit_flow(user_id, channel_id, game, *, typing=None):
     return "error", "I couldn't review that game"
 
 
+OBIT_HINT = "Use `/obit`, or send me `!obit` in a direct message: reviews are private, so I don't do them in the channel."
+
+
 @bot.command(name="obit")
 async def obit_command(ctx, game: Optional[str] = None):
-    """A private review of one of your own games, sent by DM. No link or id means your latest game. If the game hasn't
-    been analysed yet it goes to the front of the queue and the review follows when it's done. Quiet: a reaction only
-    (✅ sent, ⏳ on its way), and any error text removes itself soon. `/obit` leaves nothing in the channel at all."""
-    kind, text = await _obit_flow(ctx.author.id, ctx.channel.id, game, typing=ctx.typing)
-    if kind in ("sent", "waiting"):
-        await _react(ctx, "✅" if kind == "sent" else "⏳")
+    """A private review of one of your own games. Send it to the bot in a direct message: it works only there, and only for
+    a registered member who is on the server, so the whole exchange stays between you and the bot. In the channel it just
+    points to `/obit` and to DMs, in a message that removes itself. No link or id means your latest game. If the game
+    hasn't been analysed yet it goes to the front of the queue and the review follows when it's done."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(OBIT_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
         return
-    await _react(ctx, "❌")
+    status = await _member_status(ctx.author.id)
+    if status is True:
+        kind, text = await _obit_flow(ctx.author.id, ctx.channel.id, game, typing=ctx.typing)
+    else:
+        kind, text = "error", ("This is only for members of the server." if status is False
+                               else "I couldn't check that you're on the server just now: try again in a moment.")
+    if kind == "sent":
+        await _react(ctx, "✅")  # the review is right here
+        return
+    await _react(ctx, "⏳" if kind == "waiting" else "❌")
     try:
-        await ctx.send(text, delete_after=TEXT_STAYS_SECONDS)
+        await ctx.send(text)
     except discord.HTTPException as exc:
-        log.warning("couldn't send a reply in channel %s (%s): %s", ctx.channel.id, exc.status, text[:80])
+        log.warning("couldn't answer a direct message (%s): %s", exc.status, text[:80])
 
 
 @bot.tree.command(name="obit", description="A private review of one of your games, sent to you by DM")
@@ -914,13 +963,7 @@ async def sync_slash_commands():
     if _slash["synced"]:
         return
     _slash["synced"] = True
-    guilds = {}
-    for channel_id in ALLOWED_CHANNEL_IDS:
-        channel = bot.get_channel(channel_id)
-        guild = getattr(channel, "guild", None)
-        if guild is not None:
-            guilds[guild.id] = guild
-    for guild in guilds.values():
+    for guild in _home_guilds():
         try:
             bot.tree.copy_global_to(guild=guild)
             synced = await bot.tree.sync(guild=guild)

@@ -183,7 +183,7 @@ def guild_with(*member_ids, error=None):
         if user_id in member_ids:
             return SimpleNamespace(id=user_id)
         raise error or not_found()
-    return SimpleNamespace(fetch_member=AsyncMock(side_effect=fetch_member))
+    return SimpleNamespace(id=1, fetch_member=AsyncMock(side_effect=fetch_member))
 
 
 def in_server(ctx, guild):
