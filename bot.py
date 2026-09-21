@@ -1294,6 +1294,12 @@ async def history(ctx, username: Optional[str] = None, site: Optional[str] = Non
 @bot.event
 async def on_command(ctx):
     log.info("command !%s from %s in channel %s", ctx.command.qualified_name, ctx.author.id, ctx.channel.id)
+
+
+@bot.before_invoke
+async def _count_command(ctx):
+    """Count each command that is about to run. Done here and not in on_command, which discord.py fires without waiting: a
+    command could then read the counts (as !usage does) before its own use had been counted."""
     await _count(ctx.command.qualified_name, ctx.author.id)
 
 

@@ -105,9 +105,29 @@ def test_a_dm_that_cannot_be_sent_is_logged_and_the_others_still_get_theirs(monk
 
 def test_a_command_run_is_counted_with_the_person_who_ran_it():
     ctx = SimpleNamespace(command=SimpleNamespace(qualified_name="results"), author=SimpleNamespace(id=ALICE), channel=SimpleNamespace(id=5))
-    run(botmod.on_command(ctx))
-    run(botmod.on_command(ctx))
+    run(botmod._count_command(ctx))
+    run(botmod._count_command(ctx))
     assert totals() == {"results": 2} and usage.report(1)["days"][0]["people"] == 1
+
+
+def test_counting_happens_before_the_command_runs_so_usage_sees_its_own_use():
+    assert botmod.bot._before_invoke is botmod._count_command                                # registered to run first, and waited for
+    ctx = SimpleNamespace(command=SimpleNamespace(qualified_name="usage"), author=SimpleNamespace(id=ALICE), channel=SimpleNamespace(id=5), send=AsyncMock())
+
+    async def as_discord_runs_it():
+        await botmod.bot._before_invoke(ctx)                                                 # the hook, then the command body
+        await botmod.usage_command.callback(ctx)
+    run(as_discord_runs_it())
+    text = ctx.send.await_args.args[0]
+    day_line = text.split("```")[1].strip().splitlines()[1]                                   # today's line of the table
+    assert "Most used: usage 1" in text and day_line.split()[1:] == ["1", "1", "0"]
+
+
+def test_the_logging_hook_only_logs(caplog):
+    ctx = SimpleNamespace(command=SimpleNamespace(qualified_name="results"), author=SimpleNamespace(id=ALICE), channel=SimpleNamespace(id=5))
+    with caplog.at_level("INFO", logger="playmoreblitz"):
+        run(botmod.on_command(ctx))
+    assert "command !results from 2 in channel 5" in caplog.text and totals() == {}
 
 
 def test_counting_never_breaks_what_is_being_counted(monkeypatch, caplog):

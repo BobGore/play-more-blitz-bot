@@ -346,6 +346,7 @@ reached the bot.**
 | A month didn't close | A player's fetch failed at month end. | The failure is posted by name; fix the account or `!remove` it; run `!closemonth`. |
 | "database is locked" | Another write held the lock longer than `DB_LOCK_TIMEOUT` (5 s). | Usually transient; check nothing else holds the file. |
 | Numbers differ from Lichess's own analysis | The bot uses fewer nodes; Stockfish isn't deterministic with threads. | Expected: accuracy within a couple of points, counts indicative. |
+| The service keeps restarting and the log ends in `Cannot connect to host discord.com … Temporary failure in name resolution` | The Minix can't resolve names. Seen when Tailscale's DNS was switched on with no upstream nameservers, which rewrote `/etc/resolv.conf` to point only at Tailscale (`tailscale dns status` shows "no resolvers configured"; `journalctl -u tailscaled` shows "no upstream resolvers set, returning SERVFAIL"). Pinging an address such as `1.1.1.1` still works. | Add a global nameserver in the Tailscale admin console's DNS page, or on the Minix `sudo tailscale set --accept-dns=false` (it then uses the router's DNS again). The bot recovers by itself: the service retries every 10 s. The outside monitor emails if it is down for more than its grace time. |
 | Restarting the bot | | `sudo systemctl restart playmoreblitz`, then read the log for `connected as …` and `slash commands registered`. |
 
 ## 13. Developing and testing
