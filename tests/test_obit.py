@@ -781,3 +781,67 @@ def test_the_delivery_loop_is_not_started_twice(monkeypatch):
         monkeypatch.setattr(getattr(botmod, name), "start", lambda name=name: started.append(name))
     asyncio.run(botmod.on_ready())
     assert started == []
+
+
+# --- the Delete button on the bot's DMs --------------------------------------------------------------------------------------
+
+def test_every_dm_carries_a_delete_button(monkeypatch):
+    sent = []
+
+    class FakeUser:
+        async def send(self, content, **kwargs):
+            sent.append((content, kwargs))
+    monkeypatch.setattr(botmod.bot, "get_user", lambda user_id: FakeUser() if user_id == ALICE else None)
+    asyncio.run(botmod._dm(ALICE, ["first part", "second part"]))
+    assert [c for c, _ in sent] == ["first part", "second part"]
+    assert all(isinstance(kw["view"], botmod.DeleteButton) for _, kw in sent)
+
+
+def test_the_delete_button_is_persistent_with_a_fixed_id():
+    async def build():
+        view = botmod.DeleteButton()
+        return view.timeout, view.is_persistent(), [item.custom_id for item in view.children], [str(item.emoji) for item in view.children]
+    timeout, persistent, ids, emoji = asyncio.run(build())
+    assert timeout is None and persistent and ids == ["pmb:delete_dm"] and emoji == ["🗑️"]
+
+
+def press(guild, message):
+    interaction = SimpleNamespace(guild=guild, message=message, response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()))
+
+    async def go():
+        view = botmod.DeleteButton()
+        await view.delete.callback(interaction)
+    asyncio.run(go())
+    return interaction
+
+
+def test_pressing_delete_in_a_dm_deletes_that_message():
+    message = SimpleNamespace(delete=AsyncMock())
+    interaction = press(None, message)
+    message.delete.assert_awaited_once()
+    interaction.response.defer.assert_awaited_once()
+    interaction.response.send_message.assert_not_awaited()
+
+
+def test_the_button_never_deletes_a_message_in_a_channel():
+    message = SimpleNamespace(delete=AsyncMock())
+    interaction = press(SimpleNamespace(id=1), message)
+    message.delete.assert_not_awaited()
+    assert interaction.response.send_message.await_args.kwargs == {"ephemeral": True}
+
+
+def test_a_button_with_no_message_is_refused_and_a_failed_delete_is_survived():
+    interaction = press(None, None)
+    interaction.response.send_message.assert_awaited_once()
+    failing = SimpleNamespace(delete=AsyncMock(side_effect=discord.HTTPException(SimpleNamespace(status=404, reason="gone"), "Unknown Message")))
+    press(None, failing)                                                                     # already deleted: no error escapes
+    failing.delete.assert_awaited_once()
+
+
+def test_the_delete_button_is_registered_when_the_bot_starts(monkeypatch):
+    added = []
+    for name in ("obit_loop", "refresh_loop", "daily_posts"):
+        monkeypatch.setattr(getattr(botmod, name), "is_running", lambda: True)
+    monkeypatch.setattr(botmod.bot, "add_view", lambda view: added.append(view))
+    asyncio.run(botmod.on_ready())
+    assert len(added) == 1 and isinstance(added[0], botmod.DeleteButton)

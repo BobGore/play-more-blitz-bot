@@ -162,3 +162,127 @@ def test_a_removed_account_is_not_handed_over_and_does_not_count_against_the_new
     store.remove_player("lichess", "alice_old")                                                  # her old account was removed
     register("alice_new")
     assert store.set_owner("lichess", "alice_new", ALICE, one_per_site=True) == store.CHANGED
+
+
+# --- people who are not on the server -----------------------------------------------------------------------------------
+
+import discord
+
+import analysis_queue as q
+import obit as obit_module
+from analysis_helpers import analysed, register as register_member, spec
+
+
+def not_found():
+    return discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "Unknown Member")
+
+
+def guild_with(*member_ids, error=None):
+    """A stand-in server whose member lookup finds `member_ids`, and otherwise raises `error` (NotFound by default)."""
+    async def fetch_member(user_id):
+        if user_id in member_ids:
+            return SimpleNamespace(id=user_id)
+        raise error or not_found()
+    return SimpleNamespace(fetch_member=AsyncMock(side_effect=fetch_member))
+
+
+def in_server(ctx, guild):
+    ctx.guild = guild
+    return ctx
+
+
+def test_setowner_refuses_someone_who_is_not_on_the_server_and_changes_nothing():
+    register("alice_example")
+    ctx = in_server(make_ctx(), guild_with(BOB))
+    run(ctx, "alice_example", member(ALICE))
+    assert reactions(ctx) == [NO] and said(ctx) == ["that person isn't on this server"] and owner_of("alice_example") == ADMIN
+
+
+def test_setowner_goes_ahead_for_someone_who_is_on_the_server():
+    register("alice_example")
+    guild = guild_with(ALICE)
+    ctx = in_server(make_ctx(), guild)
+    run(ctx, "alice_example", member(ALICE))
+    assert reactions(ctx) == [OK] and owner_of("alice_example") == ALICE
+    guild.fetch_member.assert_awaited_once_with(ALICE)
+
+
+def test_a_failed_lookup_does_not_turn_a_member_away():
+    register("alice_example")
+    ctx = in_server(make_ctx(), guild_with(error=discord.HTTPException(SimpleNamespace(status=500, reason="oops"), "server error")))
+    run(ctx, "alice_example", member(ALICE))
+    assert reactions(ctx) == [OK] and owner_of("alice_example") == ALICE
+
+
+def test_add_for_someone_who_is_not_on_the_server_is_refused_before_anything_is_looked_up(monkeypatch):
+    async def forbidden(*a, **k):
+        raise AssertionError("a site was called")
+    monkeypatch.setattr(botmod.sources, "start_rating", forbidden)
+    ctx = in_server(make_ctx(), guild_with(ADMIN))
+    ctx.typing = lambda: None
+    asyncio.run(botmod.add.callback(ctx, "alice_example", "lichess", member(ALICE)))
+    assert reactions(ctx) == [NO] and said(ctx) == ["that person isn't on this server"] and store.get_player("lichess", "alice_example") is None
+    ctx.command.reset_cooldown.assert_not_called()                     # only an admin can name someone else, and admins have no cooldown to refund
+
+
+def test_adding_yourself_needs_no_lookup():
+    guild = guild_with()
+    ctx = in_server(make_ctx(), guild)
+    ctx.typing = lambda: None
+    with pytest.raises(Exception):                                     # it goes on to the (unmocked) site call, which is not what is tested
+        asyncio.run(botmod.add.callback(ctx, "alice_example", "lichess", member(ADMIN)))
+    guild.fetch_member.assert_not_awaited()
+
+
+@pytest.fixture
+def dms(monkeypatch):
+    sent = []
+
+    async def fake(user_id, messages):
+        sent.append((user_id, list(messages)))
+    monkeypatch.setattr(botmod, "_dm", fake)
+    return sent
+
+
+def waiting_review(channel_guild):
+    register_member("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    obit_module.add_request(ALICE, "lichess", "00000001", "alice_example", 555, 10 ** 10)
+    channel = SimpleNamespace(guild=channel_guild, send=AsyncMock())
+    return channel
+
+
+def test_a_review_is_not_sent_to_someone_who_has_left_the_server(dms, monkeypatch):
+    channel = waiting_review(guild_with(BOB))                        # Alice is not in it
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channel)
+    request = obit_module.outstanding()[0]
+    assert asyncio.run(botmod._process_obit(request)) == "closed"
+    assert dms == [] and obit_module.outstanding() == []              # nothing sent, and the request is gone
+    channel.send.assert_not_awaited()                                 # and the channel isn't told either
+    asyncio.run(botmod.obit_loop.coro())
+    assert dms == []
+
+
+def test_a_review_is_sent_to_someone_who_is_on_the_server(dms, monkeypatch):
+    channel = waiting_review(guild_with(ALICE))
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channel)
+    asyncio.run(botmod.obit_loop.coro())
+    assert [u for u, _ in dms] == [ALICE] and obit_module.outstanding() == []
+
+
+def test_a_review_is_sent_when_the_channel_cannot_be_found_to_check(dms, monkeypatch):
+    waiting_review(None)
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: None)
+    asyncio.run(botmod.obit_loop.coro())
+    assert [u for u, _ in dms] == [ALICE]
+
+
+def test_a_request_answered_on_the_spot_makes_no_membership_lookup(dms, monkeypatch):
+    guild = guild_with()
+    register_member("alice_example")
+    analysed(spec(1, "alice_example", "x_example"))
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: SimpleNamespace(guild=guild, send=AsyncMock()))
+    obit_module.add_request(ALICE, "lichess", "00000001", "alice_example", 555, 10 ** 10)
+    result = asyncio.run(botmod._process_obit(obit_module.outstanding()[0], immediate=True))
+    assert result == "sent" and len(dms) == 1
+    guild.fetch_member.assert_not_awaited()

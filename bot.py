@@ -233,6 +233,7 @@ async def on_ready():
         log.warning(problem)
     if not refresh_loop.is_running():  # on_ready can fire again after a reconnect
         refresh_loop.start()
+    bot.add_view(DeleteButton())  # so the Delete button on a DM sent before a restart still works
     if not obit_loop.is_running():
         obit_loop.start()
     if not daily_posts.is_running():
@@ -325,6 +326,9 @@ async def add(ctx, username: str, site: str, owner: Optional[discord.User] = Non
     person = owner or ctx.author
     if person.id != ctx.author.id and not _is_admin(ctx.author.id):
         await _reject(ctx, "only an admin can add someone else", refund_cooldown=True)
+        return
+    if person.id != ctx.author.id and not await _on_server(getattr(ctx, "guild", None), person.id):
+        await _reject(ctx, NOT_ON_SERVER, refund_cooldown=True)
         return
 
     existing = await asyncio.to_thread(store.get_player, site, username)
@@ -594,6 +598,9 @@ async def setowner(ctx, username: str, member: discord.User, site: Optional[str]
         if site not in sources.SITES:
             await _reject(ctx, "the site must be `chess.com` or `lichess`")
             return
+    if not await _on_server(getattr(ctx, "guild", None), member.id):
+        await _reject(ctx, NOT_ON_SERVER)
+        return
     matches = await asyncio.to_thread(store.find_active, username, site)
     if not matches:
         await _reject(ctx, f"'{sources.shorten(username)}' isn't on the list")
@@ -676,22 +683,70 @@ async def lastgame(ctx, username: Optional[str] = None, site: Optional[str] = No
     await ctx.send(render_analysis.render_lastgame(player.username, player.site, games[0], waiting))
 
 
+NOT_ON_SERVER = "that person isn't on this server"
+
+
+async def _on_server(guild, user_id):
+    """False only if the server says `user_id` isn't a member of it. True if they are, and also if it can't be checked (no
+    server to ask, or the lookup failed): a member must not be turned away because of a hiccup."""
+    if guild is None:
+        return True
+    try:
+        await guild.fetch_member(user_id)
+    except discord.NotFound:
+        return False
+    except discord.HTTPException as exc:
+        log.warning("couldn't check whether %s is on the server (%s)", user_id, exc.status)
+    return True
+
+
+class DeleteButton(discord.ui.View):
+    """A "Delete" button on the bot's direct messages. Discord only lets someone delete their own messages in a DM, never
+    the other side's, so the bot deletes its own message when asked. It has no timeout and a fixed id, and is registered
+    at start-up, so the button on an old message still works after the bot has restarted."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.secondary, custom_id="pmb:delete_dm")
+    async def delete(self, interaction, button):
+        if interaction.guild is not None or interaction.message is None:  # only ever a DM: never a message in a channel
+            await interaction.response.send_message("That button only works in a direct message.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        try:
+            await interaction.message.delete()
+        except discord.HTTPException as exc:
+            log.warning("couldn't delete a DM on request (%s)", exc.status)
+
+
 async def _dm(user_id, messages):
-    """Send `messages` to the user privately. Raises discord.Forbidden if they don't accept messages from the bot."""
+    """Send `messages` to the user privately, each with a Delete button. Raises discord.Forbidden if they don't accept
+    messages from the bot."""
     user = bot.get_user(user_id) or await bot.fetch_user(user_id)
     for message in messages:
-        await user.send(message)
+        await user.send(message, view=DeleteButton())
 
 
-async def _process_obit(request, *, tell_channel=True):
+async def _process_obit(request, *, immediate=False):
     """Send, hold or close one !obit request. Returns "sent", "waiting", "no_dm" (they don't accept DMs from the bot) or
-    "closed" (given up on, or answered already). Whoever removes the request from the table is the one that answers it."""
+    "closed" (given up on, answered already, or their asker has left the server). Whoever removes the request from the
+    table is the one that answers it.
+
+    `immediate` is for a request answered as it is made: the person has just written in the channel, so they are on the
+    server and the command replies to them itself. Otherwise nothing is sent to someone who has since left the server, and a
+    DM that can't be delivered is reported in the channel they asked in."""
     row = await asyncio.to_thread(obit.game_row, request["site"], request["game_id"])
     action = obit.action_for(request, row, int(time.time()))
     if action == obit.WAIT:
         return "waiting"
     if not await asyncio.to_thread(obit.close_request, request["user_id"], request["site"], request["game_id"]):
         return "closed"
+    if not immediate:
+        channel = bot.get_channel(request["channel_id"]) if request["channel_id"] else None
+        if not await _on_server(getattr(channel, "guild", None), request["user_id"]):
+            log.info("dropped the !obit request of %s: they are no longer on the server", request["user_id"])
+            return "closed"
     try:
         if action == obit.SEND:
             side = obit.side_of(row, request["username"])
@@ -702,7 +757,7 @@ async def _process_obit(request, *, tell_channel=True):
             messages = ["I couldn't get to that game's review in time (the analysis is behind). Ask again in a while."]
         await _dm(request["user_id"], messages)
     except discord.Forbidden:
-        if tell_channel:
+        if not immediate:
             await _say_no_dm(request["channel_id"], request["user_id"])
         return "no_dm"
     except discord.HTTPException:
@@ -775,7 +830,7 @@ async def obit_command(ctx, game: Optional[str] = None):
     await asyncio.to_thread(obit.add_request, ctx.author.id, key[0], key[1], account.username, ctx.channel.id, now)
     request = {"user_id": ctx.author.id, "site": key[0], "game_id": key[1], "username": account.username,
                "channel_id": ctx.channel.id, "requested_at": now}
-    result = await _process_obit(request, tell_channel=False)
+    result = await _process_obit(request, immediate=True)
     if result == "sent":
         await _tick(ctx)
         await ctx.send("I've sent you the review by DM.")
