@@ -198,6 +198,34 @@ def summary_csv(lines):
     return _csv(SUMMARY_HEADERS, lines)
 
 
+def monthly_summaries(site, username):
+    """Every month `game_analysis` holds for this account, newest first, as raw dicts (month, games, analysed, wins,
+    draws, losses, rating_start, rating_end, avg_accuracy - the last three None where there is nothing to compute).
+
+    Independent of `store.player_history`/`!history`, which reads `monthly_results` instead: this can hold a month
+    that table does not (one pulled in by `!backfill`), and its figures can differ, since the two tables are filled
+    separately. For !myhistory."""
+    with store.transaction() as conn:
+        months = [r["month"] for r in conn.execute(
+            "SELECT DISTINCT month FROM game_analysis WHERE site = ? AND (white_username = ? OR black_username = ?) ORDER BY month DESC",
+            (site, username, username))]
+    out = []
+    for month in months:
+        rows = games_for(site, username, Period("month", month, month=month))
+        sides = [(r, _side(r, username)) for r in rows]
+        results = [_result(r, s) for r, s in sides]
+        done = [(r, s) for r, s in sides if has_analysis(r)]
+        first = next((r[f"{s}_rating"] for r, s in sides if r[f"{s}_rating"] is not None), None)
+        last = next(((r[f"{s}_rating"] + r[f"{s}_rating_change"]) for r, s in reversed(sides)
+                     if r[f"{s}_rating"] is not None and r[f"{s}_rating_change"] is not None), None)
+        out.append({
+            "month": month, "games": len(rows), "analysed": len(done),
+            "wins": results.count("win"), "draws": results.count("draw"), "losses": results.count("loss"),
+            "rating_start": first, "rating_end": last, "avg_accuracy": _mean([r[f"{s}_accuracy"] for r, s in done]),
+        })
+    return out
+
+
 def file_name(site, username, period, what="games"):
     """A safe file name: "lichess_pawn_storm_2026-09.csv"."""
     clean = re.sub(r"[^A-Za-z0-9._-]", "_", f"{site}_{username}_{what + '_' if what != 'games' else ''}{period.label}")

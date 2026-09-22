@@ -396,5 +396,33 @@ def render_history(username, site, rows, target, accuracy=None, current=None):
     return _pack(parts)
 
 
+def render_myhistory(username, site, rows, current=None):
+    """One of the caller's own accounts, one line per month `export_data.monthly_summaries` found - the analysis side
+    of things (`game_analysis`), not `store.player_history`/`!history`'s `monthly_results`, so this can show a month
+    pulled in by `!backfill` that `!history` cannot, and its figures can differ from `!history`'s own."""
+    title = f"`{username}` · {SITE_NAMES.get(site, site)} · analysis history"
+    if not rows:
+        return [f"{title}\nNo months held yet."]
+    labels = [_short_month(r["month"]) + ("*" if r["month"] == current else "") for r in rows]
+    games = [str(r["games"]) for r in rows]
+    analysed = [str(r["analysed"]) for r in rows]
+    record = [f"{r['wins']}-{r['draws']}-{r['losses']}" for r in rows]
+    rating = [f"{r['rating_start']}→{r['rating_end']}" if r["rating_start"] is not None and r["rating_end"] is not None else "-" for r in rows]
+    net = [_signed(r["rating_end"] - r["rating_start"]) if r["rating_start"] is not None and r["rating_end"] is not None else "-" for r in rows]
+    acc = [_pct_whole(r["avg_accuracy"]) if r["avg_accuracy"] is not None else "-" for r in rows]
+    widths = [max(len(head), *map(len, column)) for head, column in
+              (("Month", labels), ("Gm", games), ("An", analysed), ("W-D-L", record), ("Rating", rating), ("Net", net), ("Acc", acc))]
+    header = (f"{'Month':<{widths[0]}}  {'Gm':>{widths[1]}}  {'An':>{widths[2]}}  {'W-D-L':>{widths[3]}}  "
+              f"{'Rating':>{widths[4]}}  {'Net':>{widths[5]}}  {'Acc':>{widths[6]}}")
+    lines = [header]
+    for i in range(len(rows)):
+        lines.append((f"{labels[i]:<{widths[0]}}  {games[i]:>{widths[1]}}  {analysed[i]:>{widths[2]}}  {record[i]:>{widths[3]}}  "
+                      f"{rating[i]:>{widths[4]}}  {net[i]:>{widths[5]}}  {acc[i]:>{widths[6]}}").rstrip())
+    note = "\n* still open: the month so far" if any(r["month"] == current for r in rows) else ""
+    parts = _table_parts(title, lines)
+    parts[-1] += note
+    return _pack(parts)
+
+
 def _pct_whole(score):
     return f"{int(score + 0.5)}%"

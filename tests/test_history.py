@@ -10,6 +10,7 @@ import pytest
 from analysis_helpers import analysed, spec
 from helpers import at, game
 
+import analysis_queue as q
 import analysis_reports
 import bot as botmod
 import monthargs
@@ -178,6 +179,43 @@ def test_the_columns_line_up_whatever_the_widths():
     lines = text.split("```")[1].strip("\n").split("\n")
     assert len({line.index("→") for line in lines[1:]}) == 1                      # the arrows sit in one column
     assert len({len(line.split("  ")[0]) for line in lines[1:]}) == 1             # and so does the game count that follows the month
+
+
+# --- render_myhistory: the analysis-side table, for !myhistory --------------------------------------------------------------------------
+
+def myrow(**over):
+    base = {"month": "2026-08", "games": 98, "analysed": 90, "wins": 50, "draws": 4, "losses": 44, "rating_start": 1390, "rating_end": 1412, "avg_accuracy": 71.4}
+    base.update(over)
+    return base
+
+
+def test_myhistory_has_an_analysed_column_and_no_100gob():
+    rows = [myrow(month="2026-09", games=112, analysed=100, wins=61, draws=5, losses=46, rating_start=1412, rating_end=1497, avg_accuracy=71.6),
+            myrow()]
+    (text,) = render.render_myhistory("alice_example", "lichess", rows, current="2026-09")
+    lines = text.split("```")[1].strip("\n").split("\n")
+    assert text.startswith("**`alice_example` · Lichess · analysis history**")
+    assert lines[0].split() == ["Month", "Gm", "An", "W-D-L", "Rating", "Net", "Acc"]
+    assert lines[1].split() == ["Sep", "2026*", "112", "100", "61-5-46", "1412→1497", "+85", "72%"]
+    assert lines[2].split() == ["Aug", "2026", "98", "90", "50-4-44", "1390→1412", "+22", "71%"]
+    assert "100GOB" not in text and text.rstrip().endswith("* still open: the month so far")
+
+
+def test_myhistory_shows_a_dash_where_theres_nothing_to_compute():
+    (text,) = render.render_myhistory("a", "lichess", [myrow(rating_start=None, rating_end=None, avg_accuracy=None)])
+    line = text.split("```")[1].strip("\n").split("\n")[1]
+    assert line.split()[-3:] == ["-", "-", "-"]                                    # Rating, Net, Acc
+
+
+def test_myhistory_for_no_months_gets_a_plain_line():
+    assert render.render_myhistory("a", "lichess", []) == ["`a` · Lichess · analysis history\nNo months held yet."]
+
+
+def test_a_long_myhistory_is_split_into_messages_that_fit_and_keeps_every_month():
+    months = [f"{2020 + n // 12}-{n % 12 + 1:02d}" for n in range(60)][::-1]
+    messages = render.render_myhistory("a", "lichess", [myrow(month=m) for m in months])
+    assert len(messages) > 1 and all(len(m) <= render.MAX_MESSAGE + 200 for m in messages)
+    assert sum(m.count("→") for m in messages) == 60
 
 
 # --- the commands ----------------------------------------------------------------------------------------------------------------
@@ -366,6 +404,100 @@ def test_history_is_in_dm_commands_and_the_checks_let_a_dm_run_it():
 
     async def passes():
         ctx = SimpleNamespace(guild=None, channel=SimpleNamespace(id=DM_CHANNEL), command=SimpleNamespace(name="history"))
+        return all([await discord.utils.maybe_coroutine(check, ctx) for check in botmod.bot._checks])
+    assert asyncio.run(passes()) is True
+
+
+# !myhistory - a DM command: the caller's own accounts only, read from game_analysis, not monthly_results
+
+def myhistory(ctx, *args):
+    asyncio.run(botmod.myhistory.callback(ctx, *args))
+
+
+def test_myhistory_shows_the_callers_own_analysis_history():
+    store.add_player("lichess", "alice_example", ALICE, "2026-09", 1500)
+    analysed(spec(1, "alice_example", "x_example", result="white"), spec(2, "y_example", "alice_example", result="black"))
+    ctx = dm()
+    myhistory(ctx)
+    (text,) = said(ctx)
+    lines = text.split("```")[1].strip("\n").split("\n")
+    assert "`alice_example` · Lichess · analysis history" in text
+    assert lines[0].split() == ["Month", "Gm", "An", "W-D-L", "Rating", "Net", "Acc"]
+    assert lines[1].split()[:3] == ["Sep", "2026*", "2"]
+
+
+def test_myhistory_can_show_a_month_history_cannot_see():
+    store.add_player("lichess", "alice_example", ALICE, "2026-09", 1500)                # registered this month...
+    analysed(spec(1, "alice_example", "x_example", month="2025-11", ended_at=1_700_000_000))  # ...but backfilled November
+    assert "2025-11" not in [r["month"] for r in store.player_history("lichess", "alice_example")]  # !history can't see it
+    ctx = dm()
+    myhistory(ctx)
+    assert "Nov 2025" in said(ctx)[0]                                                   # !myhistory: sees it, from game_analysis
+
+
+def test_myhistory_refuses_someone_with_no_account():
+    ctx = dm()
+    myhistory(ctx)
+    assert reactions(ctx) == [NO] and "haven't added an account" in said(ctx)[0]
+
+
+def test_myhistory_shows_every_account_when_no_site_is_given():
+    store.add_player("lichess", "alice_li", ALICE, "2026-09", 1500)
+    store.add_player("chess.com", "alice_cc", ALICE, "2026-09", 1500)
+    analysed(spec(1, "alice_li", "x_example"))
+    analysed(spec(2, "alice_cc", "y_example", site="chess.com"))
+    ctx = dm()
+    myhistory(ctx)
+    texts = said(ctx)
+    assert len(texts) == 2 and "alice_cc" in texts[0] and "Chess.com" in texts[0]        # alphabetical, like store.accounts_of
+    assert "alice_li" in texts[1] and "Lichess" in texts[1]
+
+
+def test_myhistory_takes_a_site_and_shows_only_that_account():
+    store.add_player("lichess", "alice_li", ALICE, "2026-09", 1500)
+    store.add_player("chess.com", "alice_cc", ALICE, "2026-09", 1500)
+    analysed(spec(1, "alice_li", "x_example"))
+    analysed(spec(2, "alice_cc", "y_example", site="chess.com"))
+    ctx = dm()
+    myhistory(ctx, "lichess")
+    (text,) = said(ctx)
+    assert "alice_li" in text and "alice_cc" not in text
+
+
+def test_myhistory_refuses_an_unknown_site():
+    store.add_player("lichess", "alice_example", ALICE, "2026-09", 1500)
+    ctx = dm()
+    myhistory(ctx, "fics")
+    assert reactions(ctx) == [NO] and "the site must be" in said(ctx)[0]
+
+
+def test_myhistory_refuses_a_site_the_caller_does_not_have():
+    store.add_player("lichess", "alice_example", ALICE, "2026-09", 1500)
+    ctx = dm()
+    myhistory(ctx, "chess.com")
+    assert reactions(ctx) == [NO] and "you don't have a chess.com account registered - you have alice_example (lichess)" in said(ctx)[0]
+
+
+def test_myhistory_in_the_channel_only_points_to_a_dm():
+    ctx = make_ctx(ALICE, dm=False)
+    myhistory(ctx)
+    ctx.send.assert_awaited_once_with(botmod.MYHISTORY_HINT, delete_after=botmod.TEXT_STAYS_SECONDS)
+    assert "direct message" in botmod.MYHISTORY_HINT and reactions(ctx) == []
+
+
+def test_myhistory_refuses_someone_who_is_not_on_the_server(on_the_server):
+    store.add_player("lichess", "alice_example", ALICE, "2026-09", 1500)
+    on_the_server.guild = the_server(BOB)                                   # alice is not on this server
+    ctx = dm()
+    myhistory(ctx)
+    assert reactions(ctx) == [NO] and said(ctx) == ["This is only for members of the server."]
+
+
+def test_myhistory_is_in_dm_commands_and_the_checks_let_a_dm_run_it():
+    assert "myhistory" in botmod.DM_COMMANDS
+
+    async def passes():
+        ctx = SimpleNamespace(guild=None, channel=SimpleNamespace(id=DM_CHANNEL), command=SimpleNamespace(name="myhistory"))
         return all([await discord.utils.maybe_coroutine(check, ctx) for check in botmod.bot._checks])
     assert asyncio.run(passes()) is True
 

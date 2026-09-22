@@ -85,22 +85,23 @@ discord.py does, so that cannot go unnoticed again):
 
 - In a server: only in `ALLOWED_CHANNEL_IDS`, and never the system commands.
 - In a DM to the bot: `!obit`, `!export` and `!backfill` (for anyone who is on the server and registered to an account),
-  `!history` (for anyone who is on the server; the account named, or their own, need not be theirs), `!clear` (deletes
+  `!history` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
+  anyone who is on the server and registered, their own accounts only), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
   admin system commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
 **Ownership.** `players.added_by` is the Discord ID of the member the account belongs to. "My account" in `!mystats`,
-`!obit`, `!export`, `!history` means the accounts with `added_by` equal to the person asking. An admin who registers someone else's
+`!obit`, `!export`, `!history`, `!myhistory` means the accounts with `added_by` equal to the person asking. An admin who registers someone else's
 account without naming them becomes its owner; `!setowner <username> <member> [site]` fixes that (the member must be on
 the server; non-admins keep to one account per site).
 
 **Membership.** "On the server" is checked with `guild.fetch_member`. In a DM the check is strict: not confirmed means
 refused. For an action that isn't a DM (`!add @member`, delivering a queued review) only a confirmed "not a member" blocks.
 
-**Keeping the channel quiet.** `!obit`, `!export`, `!backfill` and `!history` reply by DM; `/obit`, `/export` and
-`/backfill` answer only the person who asked (ephemeral) - `!history` has no slash version yet. Admin commands are
-DM-only. The bot never pings anyone by default (`AllowedMentions.none()`), except the one
+**Keeping the channel quiet.** `!obit`, `!export`, `!backfill`, `!history` and `!myhistory` reply by DM; `/obit`, `/export`
+and `/backfill` answer only the person who asked (ephemeral) - `!history` and `!myhistory` have no slash version yet.
+Admin commands are DM-only. The bot never pings anyone by default (`AllowedMentions.none()`), except the one
 person whose review couldn't be delivered.
 
 **In memory only:** the per-player game cache behind `!mystats` (`gamecache.py`, bounded, lost on restart), the alert rate
@@ -161,7 +162,7 @@ disk. To restore: stop the bot, copy a backup over the live file, start the bot.
    totals rewritten from that (the running totals are not trusted for the final figure); next month's rows are created;
    the final table is posted at 9am UK. If any player's fetch fails, nothing is written and the failures are named.
    `!closemonth` (admin, DM) runs the same job by hand; it never closes or posts twice.
-4. **Show it**: `!results [month]`, `!mystats`, `!mystatsfull`, `!history` (a DM command), `!lastgame`. `!results` reads the stored totals only.
+4. **Show it**: `!results [month]`, `!mystats`, `!mystatsfull`, `!history` and `!myhistory` (DM commands), `!lastgame`. `!results` reads the stored totals only.
    `!mystats` fetches a month's games (through `gamecache`) because openings and splits need the details, so it is
    throttled (`COOLDOWN_SECONDS`) and polite to the sites (`sources.py`: serial per site, timeouts, spacing).
 
@@ -403,6 +404,14 @@ player, not just the caller's own), and `store.player_history` and `render.rende
 No slash version yet, and no new membership rule beyond the usual DM one (on the server; not "registered", since a
 name can point at anyone).
 
+**`!myhistory [site]`** — the corollary Bob asked for once `!backfill` existed: `!history`'s table, but computed from
+`game_analysis` (via the new `export_data.monthly_summaries` and `render.render_myhistory`) instead of `monthly_results`,
+so it shows exactly what the analysis side of the bot holds - a month `!backfill` pulled in included, and any gap where
+a game exists but hasn't been analysed yet (the "An" column). Own accounts only, no name argument: `_pick_player` isn't
+used, `store.accounts_of` is. Reuses `export_data.games_for`/`_side`/`_result`/`has_analysis`/`_mean`, so the arithmetic
+matches `!export summary`'s CSV exactly, just drawn as a table instead of written to a file. Can disagree with
+`!history`, on purpose (see "`!backfill` is personal, on purpose" below) - that disagreement is the point of having it.
+
 **`!usage`** — `usage.py`: counts per day of each command, the distinct people seen, errors, reviews and exports sent.
 Counts only, 35 days.
 
@@ -410,7 +419,7 @@ Counts only, 35 days.
 
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
-| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!lastgame`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!history` (registered members who are on the server) | `/obit`, `/export`, `/backfill` |
+| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!lastgame`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!history`, `!myhistory` (registered members who are on the server) | `/obit`, `/export`, `/backfill` |
 | Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 
@@ -498,11 +507,13 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 - History otherwise begins at registration, except that any registered member can pull in one of their own past months with
   `!backfill`/`/backfill` (one month at a time; the site's own archive is the limit, not registration date). Data is kept
   indefinitely (a "forget me" or drop command is not built; opponents' usernames are kept as part of the public game record).
-- **`!backfill` is personal, on purpose.** It only feeds `game_analysis` (so `!obit`/`!export` can see the games); it never
-  touches `monthly_results`, so `!results`, `!history` and 100GOB are unaffected - a backfilled month never appears in the
-  channel's standings or a player's `!history` table, and can't retroactively join a past month's 100GOB. This is
-  deliberate, not a gap: `!backfill` is scoped to what one person can see about their own games, same as `!obit`/`!export`,
-  and is not a way to edit the shared record everyone else sees.
+- **`!backfill` is personal, on purpose.** It only feeds `game_analysis` (so `!obit`/`!export`/`!myhistory` can see the
+  games); it never touches `monthly_results`, so `!results`, `!history` and 100GOB are unaffected - a backfilled month
+  never appears in the channel's standings or a player's `!history` table, and can't retroactively join a past month's
+  100GOB. This is deliberate, not a gap: `!backfill` is scoped to what one person can see about their own games, same
+  as `!obit`/`!export`, and is not a way to edit the shared record everyone else sees. `!myhistory` is the read side of
+  that same choice: it deliberately reads `game_analysis` instead of `monthly_results`, so it can show a backfilled
+  month and can disagree with `!history` - both are on purpose.
 - Analysis covers games played since it was switched on (plus `!queuemonth` for the current month, or `!backfill` for a
   past one, per person).
 - **Time-management reference curves for other time controls** (3+1, 3+2, 5+3, 5+5, ...): the reference in check 5 was measured on 3+0 and 5+0 games only, so other controls get no pace line. Deriving more is a planned development (same method: average the fraction of the base time left at each move over many public games of one time control).

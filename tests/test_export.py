@@ -265,6 +265,50 @@ def test_a_summary_of_no_games_has_no_percentage():
     assert (line["games"], line["analysed"], line["win_percent"]) == (0, 0, "")
 
 
+# --- monthly_summaries: the analysis side of !history, for !myhistory --------------------------------------------------------------------------
+
+def test_monthly_summaries_is_empty_for_an_account_with_nothing_held():
+    assert export_data.monthly_summaries("lichess", "nobody_example") == []
+
+
+def test_monthly_summaries_groups_by_month_newest_first():
+    register("alice_example")
+    analysed(spec(1, "alice_example", "x_example", month="2025-11", ended_at=NOW - 2_000_000, result="white"),
+             spec(2, "alice_example", "y_example", month="2025-12", ended_at=NOW - 1_000_000, result="black"),
+             spec(3, "alice_example", "z_example", month="2025-12", ended_at=NOW - 900_000, result="draw"))
+    rows = export_data.monthly_summaries("lichess", "alice_example")
+    assert [r["month"] for r in rows] == ["2025-12", "2025-11"]
+    assert (rows[0]["games"], rows[0]["wins"], rows[0]["draws"], rows[0]["losses"]) == (2, 0, 1, 1)
+    assert (rows[1]["games"], rows[1]["wins"], rows[1]["draws"], rows[1]["losses"]) == (1, 1, 0, 0)
+
+
+def test_monthly_summaries_matches_the_export_summarys_own_arithmetic():
+    rows = summary_data()                                                                  # 3 games in September, built above
+    exported = dict(zip(export_data.SUMMARY_HEADERS, export_data.summary_cells("lichess", "alice_example", period(), rows)))
+    (line,) = export_data.monthly_summaries("lichess", "alice_example")
+    assert line["month"] == "2026-09"
+    assert (line["games"], line["analysed"], line["wins"], line["draws"], line["losses"]) == (
+        exported["games"], exported["analysed"], exported["wins"], exported["draws"], exported["losses"])
+    assert (str(line["rating_start"]), str(line["rating_end"])) == (exported["rating_start"], exported["rating_end"])
+    assert line["avg_accuracy"] == pytest.approx(74.8)                        # (88.4 + 61.2) / 2, no rounding to fight with
+
+
+def test_monthly_summaries_only_covers_the_named_account():
+    register("alice_example", "bob_example")
+    analysed(spec(1, "alice_example", "x_example"), spec(2, "bob_example", "y_example"))
+    (line,) = export_data.monthly_summaries("lichess", "alice_example")
+    assert line["games"] == 1
+    assert export_data.monthly_summaries("chess.com", "alice_example") == []               # not this site
+
+
+def test_monthly_summaries_leaves_rating_and_accuracy_none_with_nothing_to_compute():
+    register("alice_example")
+    q.queue_games([spec(1, "alice_example", "x_example", white_rating=None)], NOW)         # queued, not analysed, and no rating
+    (line,) = export_data.monthly_summaries("lichess", "alice_example")
+    assert (line["games"], line["analysed"]) == (1, 0)
+    assert (line["rating_start"], line["rating_end"], line["avg_accuracy"]) == (None, None, None)
+
+
 # --- what the commands do -----------------------------------------------------------------------------------------------------------
 
 def the_server(*member_ids, error=None, guild_id=1):
@@ -530,7 +574,7 @@ def test_the_command_checks_let_a_dm_run_export_and_obit_only():
     assert passes(None, DM_CHANNEL, "export") is True and passes(None, DM_CHANNEL, "obit") is True and passes(None, DM_CHANNEL, "results") is False
     assert passes(None, DM_CHANNEL, "backfill") is True
     assert passes(SimpleNamespace(id=1), CHANNEL, "export") is True and passes(SimpleNamespace(id=1), CHANNEL + 1, "export") is False
-    assert botmod.DM_COMMANDS == ("obit", "export", "clear", "backfill", "history")
+    assert botmod.DM_COMMANDS == ("obit", "export", "clear", "backfill", "history", "myhistory")
 
 
 # --- /export ---------------------------------------------------------------------------------------------------------------------------------------
@@ -624,7 +668,7 @@ def test_help_and_readme_describe_export():
     ctx = make_ctx(dm=False)
     asyncio.run(botmod.help_blitz_bot.callback(ctx))
     text = said(ctx)[0]
-    assert "`/export [period] [what]`" in text and "Or send me `!export` in a direct message" in text and len(text) < 2000
+    assert "`/export [period] [what]`" in text and "Or `!export` by DM" in text and len(text) < 2000
     readme = open(botmod.__file__.replace("bot.py", "README.md"), encoding="utf-8").read()
     assert "`!export [summary] [period]`" in readme and "`/export [period] [what]`" in readme
     assert botmod.USAGE["export"] == "!export [summary] [period]"

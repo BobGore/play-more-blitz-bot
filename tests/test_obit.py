@@ -837,7 +837,7 @@ def test_the_command_has_a_usage_line_no_cooldown_of_its_own_and_help_mentions_b
     ctx = make_ctx(ALICE)
     asyncio.run(botmod.help_blitz_bot.callback(ctx))
     text = said(ctx)[0]
-    assert "`/obit [game link or id]`" in text and "Or send me `!obit` in a direct message" in text and "Registered members on the server only" in text and len(text) < 2000
+    assert "`/obit [game link or id]`" in text and "Or `!obit` by DM" in text and "Registered members on the server only" in text and len(text) < 2000
 
 
 def statuses():

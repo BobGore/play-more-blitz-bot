@@ -78,6 +78,7 @@ USAGE = {
     "obit": "!obit [game link or id]",
     "export": "!export [summary] [period]",
     "backfill": "!backfill <month>",
+    "myhistory": "!myhistory [site]",
     "usage": "!usage [days]",
     "clear": "!clear",
     "setowner": "!setowner <username> <@member> [site]",
@@ -346,7 +347,7 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export", "clear", "backfill", "history")  # the private commands members can send the bot in a direct message
+DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory")  # the private commands members can send the bot in a direct message
 ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
@@ -419,18 +420,18 @@ async def help_blitz_bot(ctx):
         "`!100gobnext [username]` - sign up for next month's challenge\n"
         "`!mystats [username] [month]` - one player's results and openings this month, or another month (yours if no name)\n"
         "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
-        "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB. "
-        "Send it to me in a direct message\n"
+        "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB. Direct message only\n"
+        "`!myhistory [site]` - your own months from what's been analysed - can include a month `!backfill` added that "
+        "`!history` can't see. Direct message only\n"
         "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
         "`/obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), "
         "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Nothing appears in the "
-        "channel. Or send me `!obit` in a direct message. Registered members on the server only\n"
+        "channel. Or `!obit` by DM. Registered members on the server only\n"
         "`/export [period] [what]` - your own games as a CSV file for a spreadsheet, one file per account, sent by DM; period is "
-        "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or send me `!export` in a direct "
-        "message\n"
-        "`/backfill <month>` - fetch one of your own past months (before registering, or one missed) and queue it for analysis: "
-        "`2025-11` or `november`. Or send me `!backfill` in a direct message\n"
-        "`!clear` - send it to me in a direct message to delete everything I've sent you there, old messages included\n"
+        "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or `!export` by DM\n"
+        "`/backfill <month>` - fetch one of your own past months (before registering, or one missed) for analysis: `2025-11` "
+        "or `november`. Or `!backfill` by DM\n"
+        "`!clear` - DM me to delete everything I've sent you there, old messages included\n"
     )
 
 
@@ -1483,6 +1484,47 @@ async def history(ctx, username: Optional[str] = None, site: Optional[str] = Non
         accuracy = {}
     for message in render.render_history(player.username, player.site, rows, GOB_TARGET, accuracy, current=sources.current_month()):
         await ctx.send(message)
+
+
+MYHISTORY_HINT = "Send me `!myhistory [site]` in a direct message: it works only there."
+
+
+@bot.command(name="myhistory")
+async def myhistory(ctx, site: Optional[str] = None):
+    """Your own accounts, one line per month `game_analysis` holds - the analysis side of things, not `!history`'s
+    `monthly_results`, so a month `!backfill` pulled in shows up here even though `!history` can't see it. Direct
+    messages only, and only for a registered member who is on the server."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(MYHISTORY_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
+        return
+    status = await _member_status(ctx.author.id)
+    if status is not True:
+        await _react(ctx, "❌")
+        await ctx.send(_not_a_member_text(status))
+        return
+    accounts = await asyncio.to_thread(store.accounts_of, ctx.author.id)
+    if not accounts:
+        await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` in the server's channel first")
+        return
+    if site is not None:
+        site = site.lower()
+        if site not in sources.SITES:
+            await _reject(ctx, "the site must be `chess.com` or `lichess`")
+            return
+        chosen = [a for a in accounts if a.site == site]
+        if not chosen:
+            others = ", ".join(f"{a.username} ({a.site})" for a in accounts)
+            await _reject(ctx, f"you don't have a {site} account registered - you have {others}")
+            return
+        accounts = chosen
+    current = sources.current_month()
+    for account in accounts:
+        rows = await asyncio.to_thread(export_data.monthly_summaries, account.site, account.username)
+        for message in render.render_myhistory(account.username, account.site, rows, current=current):
+            await ctx.send(message)
 
 
 @bot.event
