@@ -18,7 +18,7 @@ Contents: 1 The picture · 2 The machines · 3 The bot · 4 The database · 5 Mo
    Chess.com API ─┐                                     ┌── Discord (the server, DMs, slash commands)
    Lichess API  ──┤                                     │
                   ▼                                     ▼
-            ┌──────────────────────────  MINIX (always on)  ──────────────────────────┐
+            ┌────────────────────────  BOT SERVER (always on)  ───────────────────────┐
             │  bot.py  (discord.py)                                                    │
             │    commands ──► SQLite database  ◄── refresh every 30 min (totals)      │
             │    loops:  refresh · obit delivery · health · heartbeat · daily posts    │
@@ -29,11 +29,11 @@ Contents: 1 The picture · 2 The machines · 3 The bot · 4 The database · 5 Mo
             └────────────────────┼───┴─────────────────────────────────────────────────┘
                         SSH (key locked to the gateway; over the private network)
             ┌────────────────────┼─────────────────────────────────────────────────────┐
-            │  ELITEDESK (Windows, faster CPU)                                          │
+            │  ANALYSIS WORKER (Windows, faster CPU)                                    │
             │  worker.py  pulls jobs ─► fetches each game itself ─► Stockfish ─►        │
             │             analysis.py figures ─► sends them back                        │
             └───────────────────────────────────────────────────────────────────────────┘
-   The developer's PC: edit code, run tests, commit, push to GitHub; the Minix pulls.
+   The developer's PC: edit code, run tests, commit, push to GitHub; the bot server pulls.
 ```
 
 Two separate jobs share the bot:
@@ -50,15 +50,15 @@ The bot never trusts the worker with anything beyond figures, and never keeps a 
 
 | What | Role | How to look at it |
 | --- | --- | --- |
-| **Minix** (small always-on Linux box) | Runs the bot (systemd service `playmoreblitz`), holds the database and the queue, runs the gateway the worker calls, runs the nightly backup timer. | `ssh MINIX`; log: `journalctl -u playmoreblitz -f`; code in `~/playmoreblitz`; its own venv `venv/`. |
-| **EliteDesk** (Windows 11) | Runs the analysis worker as a Windows scheduled task (`PlayMoreBlitzWorker`, starts at boot, runs as SYSTEM, restarts on failure, below-normal priority). Has Stockfish. | `ssh ELITEDESK`; log: `C:\ProgramData\pmb-worker\worker.log`; files in `C:\Users\<user>\pmb-worker\`; its Python venv `C:\Users\<user>\pmb-analysis\venv` (keep it: the service uses it). |
+| **The bot server** (any small always-on Linux box; currently an old mini PC) | Runs the bot (systemd service `playmoreblitz`), holds the database and the queue, runs the gateway the worker calls, runs the nightly backup timer. | `ssh` to it; log: `journalctl -u playmoreblitz -f`; code in `~/playmoreblitz`; its own venv `venv/`. |
+| **The analysis worker** (any machine with a few CPU cores to spare; currently a reasonably specced HP EliteDesk 800 G6, 16 GB RAM, Windows 11) | Runs the analysis worker as a Windows scheduled task (`PlayMoreBlitzWorker`, starts at boot, runs as SYSTEM, restarts on failure, below-normal priority). Has Stockfish; on the current machine, timing games through the fixed 200,000-nodes/position budget works out to roughly 4-5 million nodes/second across its 8 threads on average — the true rate varies with how sharp a position is, so treat it as a ballpark, not a benchmark. | `ssh` to it; log: `C:\ProgramData\pmb-worker\worker.log`; files in `C:\Users\<user>\pmb-worker\`; its Python venv `C:\Users\<user>\pmb-analysis\venv` (keep it: the service uses it). |
 | **Developer PC** | Editing, tests, git. | `C:\Users\<user>\playmoreblitz-bot` (has the private test fixtures; never commit them). |
-| **GitHub** | The copy both machines pull from (`main`). | `git push` from the PC; `git pull` on the Minix. |
+| **GitHub** | The copy both machines pull from (`main`). | `git push` from the PC; `git pull` on the bot server. |
 | **Discord** | The application/bot, the server, channels, slash commands. | Developer Portal for the token and invite; Server Settings for roles. |
-| **Storage** | The database on the large drive (`PLAYMOREBLITZ_DB` in the Minix `.env`); nightly backups on a separate USB drive, kept `BACKUP_KEEP_DAYS` (100) days. | See section 4. |
+| **Storage** | The database on the large drive (`PLAYMOREBLITZ_DB` in the bot server's `.env`); nightly backups on a separate USB drive, kept `BACKUP_KEEP_DAYS` (100) days. | See section 4. |
 
-The Minix and the EliteDesk reach each other over a private network. The worker connects **to** the Minix (never the
-other way round), so the Minix needs no open door to the EliteDesk.
+The bot server and the analysis worker reach each other over a private network. The worker connects **to** the bot
+server (never the other way round), so the bot server needs no open door to the analysis worker.
 
 ## 3. The bot
 
@@ -134,7 +134,7 @@ centipawns, White's view); `evals` (the score after every ply, packed two bytes 
 `[ply, "i"|"m"|"b", points lost]`, both sides); `site_*_accuracy` (the site's own numbers, kept apart); `shape` (unused).
 **The moves themselves are never stored** (the clocks are: they say how long each move took, not what it was).
 
-**Looking inside** (on the Minix; the file is where `PLAYMOREBLITZ_DB` in `.env` says):
+**Looking inside** (on the bot server; the file is where `PLAYMOREBLITZ_DB` in `.env` says):
 
 ```bash
 sqlite3 "$DB" "select site, username, added_by, active from players"
@@ -213,7 +213,7 @@ doesn't match `plies`, or whose moments don't agree with the side's counts (each
 inaccuracies/mistakes/blunders as its counts say). A rejected result leaves the game `claimed` (it returns to `pending`
 when the lease expires).
 
-**The gateway (`worker_gateway.py`).** The worker's SSH key on the Minix is locked in `~/.ssh/authorized_keys` to one
+**The gateway (`worker_gateway.py`).** The worker's SSH key on the bot server is locked in `~/.ssh/authorized_keys` to one
 program:
 
 ```
@@ -300,18 +300,18 @@ SYSTEM at boot, restart on failure. SYSTEM can't use the user's SSH key, so it h
 
 **Windows quirks that bit before.** `ssh.exe` hangs when driven through pipes or with big bodies, so `worker.py`'s
 `Gateway` passes stdin/stdout through temp files and sends submits in chunks of at most 60,000 characters. A `2>nul` in
-a command sent to the EliteDesk breaks it under `cmd`. Write `.ps1` scripts and copy them over rather than quoting through ssh.
+a command sent to the analysis worker breaks it under `cmd`. Write `.ps1` scripts and copy them over rather than quoting through ssh.
 
 **Deploying a change.**
 
-- *Bot-only change* (commands, rendering, settings): commit and push on the PC; on the Minix `git pull`; restart the bot
+- *Bot-only change* (commands, rendering, settings): commit and push on the PC; on the bot server `git pull`; restart the bot
   (`sudo systemctl restart playmoreblitz`, needs the owner's sudo). The worker is untouched.
 - *Anything that changes the method or the worker* (`analysis.py`, `divider.py`, `game_data.py`, `worker.py`,
-  `worker_gateway.py`, or the queue's rules): **in this order** — stop the worker task; pull on the Minix; copy the changed
-  worker files to the EliteDesk; start the worker task. The worker refuses to start against a gateway with a different
+  `worker_gateway.py`, or the queue's rules): **in this order** — stop the worker task; pull on the bot server; copy the changed
+  worker files to the analysis worker; start the worker task. The worker refuses to start against a gateway with a different
   `method_version`, so a half-done update stops safely instead of writing bad rows. Raise `METHOD_VERSION` if the figures
   or what is stored change, and the whole history is re-analysed by itself (about 3 s per game).
-- *Roll back:* `git revert` (or check out the previous commit) and pull again on the Minix; restore a database backup if
+- *Roll back:* `git revert` (or check out the previous commit) and pull again on the bot server; restore a database backup if
   a bad change wrote bad rows.
 
 ## 9. Reviews, exports and usage
@@ -440,7 +440,7 @@ player, not just the caller's own), and `store.player_history` and `render.rende
 No slash version yet, and no new membership rule beyond the usual DM one (on the server; not "registered", since a
 name can point at anyone).
 
-**`!myhistory [site]`** — the corollary Bob asked for once `!backfill` existed: `!history`'s table, but computed from
+**`!myhistory [site]`** — the corollary the owner asked for once `!backfill` existed: `!history`'s table, but computed from
 `game_analysis` (via the new `export_data.monthly_summaries` and `render.render_myhistory`) instead of `monthly_results`,
 so it shows exactly what the analysis side of the bot holds - a month `!backfill` pulled in included, and any gap where
 a game exists but hasn't been analysed yet (the "An" column). Own accounts only, no name argument: `_pick_player` isn't
@@ -461,20 +461,20 @@ Counts only, 35 days.
 
 ## 11. Watching over it
 
-Alerts arrive as a DM headed "⚠ PlayMoreBlitz" to `ALERT_USER_IDS` (default: just Bob). Each is repeated at most every 6
+Alerts arrive as a DM headed "⚠ PlayMoreBlitz" to `ALERT_USER_IDS` (default: just the owner). Each is repeated at most every 6
 hours while it lasts, and forgotten when it clears (so a return is reported at once); an error is repeated at most every
 30 minutes. Logic is in `monitoring.py`; the loops are in `bot.py`.
 
 | Alert says | It means | First thing to check | Usual fix |
 | --- | --- | --- | --- |
 | "!x from <id> hit an unexpected error (Type: message)" | A command raised something other than a normal refusal; the ID is whoever ran it. | `journalctl -u playmoreblitz` for the traceback (it says `!x failed for <id>`) and the lines just before it about that ID. | Fix the bug; the counts in `!usage` show how often. |
-| "N games are waiting… no analysis worker has ever asked" / "The analysis worker last asked for work X ago" | The EliteDesk worker is not polling (15 min+, with games waiting). | `!analysisq`; the worker log; is the EliteDesk on and the task running (`schtasks /Query /TN PlayMoreBlitzWorker`)? Can it reach the Minix over ssh? | Start the task; fix the network/key; a reboot of the EliteDesk starts it by itself. |
+| "N games are waiting… no analysis worker has ever asked" / "The analysis worker last asked for work X ago" | The analysis worker is not polling (15 min+, with games waiting). | `!analysisq`; the worker log; is the analysis worker machine on and the task running (`schtasks /Query /TN PlayMoreBlitzWorker`)? Can it reach the bot server over ssh? | Start the task; fix the network/key; a reboot of the analysis worker starts it by itself. |
 | "The newest backup is from … days ago" / "backup folder … is missing" / "no backups" | The nightly backup isn't running. | Is the USB drive mounted (`df`)? `systemctl status playmoreblitz-backup.service`; `journalctl -u playmoreblitz-backup`. | Remount, rerun `venv/bin/python backup.py`. |
-| "The last N refresh cycles all failed" | Every player's refresh failed N cycles running (the sites can't be reached). | `journalctl` for `refresh failed` lines; can the Minix reach Chess.com and Lichess? | Network/DNS; wait if a site is down. |
+| "The last N refresh cycles all failed" | Every player's refresh failed N cycles running (the sites can't be reached). | `journalctl` for `refresh failed` lines; can the bot server reach Chess.com and Lichess? | Network/DNS; wait if a site is down. |
 | "a refresh cycle crashed" / "sending the reviews… crashed" | A background loop hit a bug. | The traceback in the log. | Fix; the loop carries on at its next turn. |
 
 **If the bot itself is down** it can't tell you. Set `HEARTBEAT_URL` (a free Healthchecks.io check: period 1 minute, grace
-10 minutes; a restart takes seconds and even a Minix reboot is shorter than the grace) and the monitor emails you when the
+10 minutes; a restart takes seconds and even a reboot of the bot server is shorter than the grace) and the monitor emails you when the
 pings stop. The service also restarts itself after a crash (`Restart=always`, 10 s).
 
 ## 12. Runbook
@@ -518,7 +518,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 | A month didn't close | A player's fetch failed at month end. | The failure is posted by name; fix the account or `!remove` it; run `!closemonth`. |
 | "database is locked" | Another write held the lock longer than `DB_LOCK_TIMEOUT` (5 s). | Usually transient; check nothing else holds the file. |
 | Numbers differ from Lichess's own analysis | The bot uses fewer nodes; Stockfish isn't deterministic with threads. | Expected: accuracy within a couple of points, counts indicative. |
-| The service keeps restarting and the log ends in `Cannot connect to host discord.com … Temporary failure in name resolution` | The Minix can't resolve names. Seen when Tailscale's DNS was switched on with no upstream nameservers, which rewrote `/etc/resolv.conf` to point only at Tailscale (`tailscale dns status` shows "no resolvers configured"; `journalctl -u tailscaled` shows "no upstream resolvers set, returning SERVFAIL"). Pinging an address such as `1.1.1.1` still works. | Add a global nameserver in the Tailscale admin console's DNS page, or on the Minix `sudo tailscale set --accept-dns=false` (it then uses the router's DNS again). The bot recovers by itself: the service retries every 10 s. The outside monitor emails if it is down for more than its grace time. |
+| The service keeps restarting and the log ends in `Cannot connect to host discord.com … Temporary failure in name resolution` | The bot server can't resolve names. Seen when the private network's own DNS override was switched on with no upstream nameservers behind it, so lookups outside that network went nowhere. Pinging a raw address such as `1.1.1.1` still works. | Check the private network tool's own DNS/override settings and its background service log for a resolver error; either add a global nameserver there or turn its DNS override off (the bot server then uses the router's DNS again). The bot recovers by itself: the service retries every 10 s. The outside monitor emails if it is down for more than its grace time. |
 | Restarting the bot | | `sudo systemctl restart playmoreblitz`, then read the log for `connected as …` and `slash commands registered`. |
 
 ## 13. Developing and testing
@@ -534,7 +534,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 - **Editing gotchas.** Some files have Windows line endings: a script that edits them must read with `newline=""`.
   Backslash sequences in shell heredocs can be unescaped before they reach Python: write edit scripts to a file with the
   editor tool instead.
-- **House rules (Bob's).** Committed files use invented example names only: no real chess usernames, no tokens, no email.
+- **House rules (the owner's).** Committed files use invented example names only: no real chess usernames, no tokens, no email.
   Real data goes in git-ignored private fixtures. The Discord token lives only in `.env` files and is never printed.
   Commit and push only when asked. Personal features go by DM, never the channel. Don't open files or browsers on the
   user's machine unprompted.
@@ -571,7 +571,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 | `stats.py`, `openings.py`, `render.py`, `monthargs.py` | Numbers from games, opening families, table text, reading "august"/"last" |
 | `analysis_feed.py`, `game_records.py`, `analysis_queue.py` | Putting games in the queue, and the queue itself (claim/submit/release/prioritise/status) |
 | `analysis.py`, `divider.py` | The method (accuracy, judgement, phases, moments, packing) |
-| `worker.py`, `worker_gateway.py`, `game_data.py` | The EliteDesk worker, the Minix gateway it calls, reading a game from a site |
+| `worker.py`, `worker_gateway.py`, `game_data.py` | The analysis worker, the bot server's gateway it calls, reading a game from a site |
 | `analysis_reports.py`, `render_analysis.py` | Reading the analysis for display |
 | `obit.py`, `render_obit.py`, `clock_review.py` | Reviews: reading a game reference, own games, requests; the review text; the clock checks (how the time was spent) |
 | `export_data.py` | CSV exports |
@@ -584,7 +584,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 
 ## Local details (kept out of this public repository)
 
-The real host names, user names, Tailscale address, file paths on each machine, Discord server/channel/admin IDs and the
+The real host names, user names, private network addresses, file paths on each machine, Discord server/channel/admin IDs and the
 step-by-step commands used to deploy are in the owner's private notes (`playmoreblitz-design.md` in the Downloads
 folder, "Local cheat sheet") and in the assistant's memory for this project. The Discord token is only ever in the
 `.env` files and must never be pasted anywhere.
