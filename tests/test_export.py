@@ -530,7 +530,7 @@ def test_the_command_checks_let_a_dm_run_export_and_obit_only():
     assert passes(None, DM_CHANNEL, "export") is True and passes(None, DM_CHANNEL, "obit") is True and passes(None, DM_CHANNEL, "results") is False
     assert passes(None, DM_CHANNEL, "backfill") is True
     assert passes(SimpleNamespace(id=1), CHANNEL, "export") is True and passes(SimpleNamespace(id=1), CHANNEL + 1, "export") is False
-    assert botmod.DM_COMMANDS == ("obit", "export", "clear", "backfill")
+    assert botmod.DM_COMMANDS == ("obit", "export", "clear", "backfill", "history")
 
 
 # --- /export ---------------------------------------------------------------------------------------------------------------------------------------

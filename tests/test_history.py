@@ -5,6 +5,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 from analysis_helpers import analysed, spec
 from helpers import at, game
@@ -19,12 +20,30 @@ import store
 OK, NO = "✅", "❌"
 ALICE, BOB = 1001, 1002
 NOW_MONTH = "2026-09"
+CHANNEL, DM_CHANNEL = 555, 777
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(sources, "current_month", lambda now=None: NOW_MONTH)
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", {CHANNEL})
+
+
+def the_server(*member_ids, error=None, guild_id=1):
+    async def fetch_member(user_id):
+        if user_id in member_ids:
+            return SimpleNamespace(id=user_id)
+        raise error or discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "Unknown Member")
+    return SimpleNamespace(id=guild_id, fetch_member=AsyncMock(side_effect=fetch_member))
+
+
+@pytest.fixture(autouse=True)
+def on_the_server(monkeypatch):
+    """!history is a DM command and checks membership; the others in this file don't touch this, so it's harmless there."""
+    channel = SimpleNamespace(id=CHANNEL, guild=the_server(ALICE, BOB), send=AsyncMock())
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channel if channel_id == CHANNEL else None)
+    return channel
 
 
 # --- reading a month --------------------------------------------------------------------------------------------------------
@@ -171,9 +190,10 @@ class Typing:
         return False
 
 
-def make_ctx(author_id):
-    return SimpleNamespace(author=SimpleNamespace(id=author_id), message=SimpleNamespace(add_reaction=AsyncMock()), send=AsyncMock(),
-                           typing=lambda: Typing(), command=MagicMock())
+def make_ctx(author_id, dm=False):
+    return SimpleNamespace(author=SimpleNamespace(id=author_id), channel=SimpleNamespace(id=DM_CHANNEL if dm else CHANNEL),
+                           guild=None if dm else SimpleNamespace(id=1), message=SimpleNamespace(add_reaction=AsyncMock()),
+                           send=AsyncMock(), typing=lambda: Typing(), command=MagicMock())
 
 
 def run(command, ctx, *args):
@@ -253,11 +273,15 @@ def test_a_long_month_word_is_cut_short_in_the_reply():
     assert len(said(ctx)[0]) < 200
 
 
-# !history
+# !history - a DM command: registered members who are on the server, for any registered player (not just their own account)
+
+def dm(author_id=ALICE):
+    return make_ctx(author_id, dm=True)
+
 
 def test_history_shows_the_callers_own_months_newest_first():
     two_months()
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.history, ctx)
     (text,) = said(ctx)
     lines = text.split("```")[1].strip("\n").split("\n")
@@ -271,18 +295,18 @@ def test_history_for_another_player_by_name_and_with_accuracy_from_analysed_game
     store.add_player("lichess", "carol_example", BOB, "2026-09", 1500)
     from analysis_helpers import side
     analysed(spec(1, "carol_example", "x_example", month="2026-09"), white=side(accuracy=82.0))
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.history, ctx, "carol_example")
     assert "82%" in said(ctx)[0] and "carol_example" in said(ctx)[0]
 
 
 def test_history_uses_the_same_account_picking_as_the_other_commands():
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.history, ctx)
     assert reactions(ctx) == [NO] and "haven't added an account" in said(ctx)[0]
     two_months()
     store.add_player("lichess", "alice_li", ALICE, "2026-09", 1500)
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.history, ctx)
     assert "you have 2 accounts: Alice (chess.com), alice_li (lichess)" in said(ctx)[0] and "!history" in said(ctx)[0]
 
@@ -292,7 +316,7 @@ def test_history_still_shows_the_months_if_the_accuracy_column_cannot_be_read(mo
         raise RuntimeError("analysis table unreadable")
     monkeypatch.setattr(botmod.analysis_reports, "monthly_accuracy", broken)
     two_months()
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.history, ctx)
     text = said(ctx)[0]
     assert "Aug" in text and "Sep" in text and text.split("```")[1].strip("\n").split("\n")[1].split()[-1] == "-"
@@ -302,7 +326,7 @@ def test_history_for_a_registered_player_with_no_month_rows_says_nothing_is_reco
     store.add_player("chess.com", "Alice", ALICE, "2026-09", 1500)
     with store.transaction() as conn:
         conn.execute("DELETE FROM monthly_results")                          # not something the bot does, but the command must cope
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.history, ctx)
     assert said(ctx) == ["Nothing has been recorded yet."]
 
@@ -312,7 +336,38 @@ def test_history_makes_no_calls_to_the_chess_sites(monkeypatch):
         raise AssertionError("a site was called")
     monkeypatch.setattr(sources, "month_games", forbidden)
     two_months()
-    run(botmod.history, make_ctx(ALICE))
+    run(botmod.history, dm())
+
+
+def test_history_in_the_channel_only_points_to_a_dm():
+    ctx = make_ctx(ALICE, dm=False)
+    run(botmod.history, ctx)
+    ctx.send.assert_awaited_once_with(botmod.HISTORY_HINT, delete_after=botmod.TEXT_STAYS_SECONDS)
+    assert "direct message" in botmod.HISTORY_HINT and reactions(ctx) == []
+
+
+def test_history_refuses_someone_who_is_not_on_the_server(on_the_server):
+    two_months()
+    on_the_server.guild = the_server(BOB)                                   # alice is not on this server
+    ctx = dm()
+    run(botmod.history, ctx)
+    assert reactions(ctx) == [NO] and said(ctx) == ["This is only for members of the server."]
+
+
+def test_history_when_membership_cannot_be_checked_is_refused_too(monkeypatch):
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", set())               # no home guild to check against
+    ctx = dm()
+    run(botmod.history, ctx)
+    assert reactions(ctx) == [NO] and "couldn't check" in said(ctx)[0]
+
+
+def test_history_is_in_dm_commands_and_the_checks_let_a_dm_run_it():
+    assert "history" in botmod.DM_COMMANDS
+
+    async def passes():
+        ctx = SimpleNamespace(guild=None, channel=SimpleNamespace(id=DM_CHANNEL), command=SimpleNamespace(name="history"))
+        return all([await discord.utils.maybe_coroutine(check, ctx) for check in botmod.bot._checks])
+    assert asyncio.run(passes()) is True
 
 
 # !mystats and !mystatsfull for a month

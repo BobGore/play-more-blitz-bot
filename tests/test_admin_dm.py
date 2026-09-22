@@ -54,11 +54,14 @@ def test_not_even_an_admin_can_use_one_in_the_channel(name):
 
 
 def test_everything_else_is_as_it_was():
-    for name in ("results", "mystats", "add", "remove", "helpblitzbot", "lastgame", "history"):
+    for name in ("results", "mystats", "add", "remove", "helpblitzbot", "lastgame"):
         assert passes(MEMBER, SERVER, CHANNEL, name) is True and passes(ADMIN, SERVER, CHANNEL, name) is True
         assert passes(MEMBER, SERVER, OTHER_CHANNEL, name) is False
         assert passes(ADMIN, None, DM_CHANNEL, name) is False and passes(MEMBER, None, DM_CHANNEL, name) is False
-    assert passes(MEMBER, None, DM_CHANNEL, "obit") is True and passes(MEMBER, None, DM_CHANNEL, "export") is True
+    # obit/export/backfill/history: the check lets a DM through. A channel message passes the check too (they aren't admin
+    # system commands), same as before; each one's own body is what gives a hint instead of really running there.
+    for name in ("obit", "export", "backfill", "history"):
+        assert passes(MEMBER, None, DM_CHANNEL, name) is True
     assert passes(ADMIN, None, DM_CHANNEL, None) is False
 
 

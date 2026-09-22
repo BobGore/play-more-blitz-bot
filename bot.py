@@ -346,7 +346,7 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export", "clear", "backfill")  # the private commands members can send the bot in a direct message
+DM_COMMANDS = ("obit", "export", "clear", "backfill", "history")  # the private commands members can send the bot in a direct message
 ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
@@ -419,7 +419,8 @@ async def help_blitz_bot(ctx):
         "`!100gobnext [username]` - sign up for next month's challenge\n"
         "`!mystats [username] [month]` - one player's results and openings this month, or another month (yours if no name)\n"
         "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
-        "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB\n"
+        "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB. "
+        "Send it to me in a direct message\n"
         "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
         "`/obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), "
         "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Nothing appears in the "
@@ -427,9 +428,8 @@ async def help_blitz_bot(ctx):
         "`/export [period] [what]` - your own games as a CSV file for a spreadsheet, one file per account, sent by DM; period is "
         "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or send me `!export` in a direct "
         "message\n"
-        "`/backfill <month>` - fetch one of your own past months (before you registered, or one analysis missed) and queue it, "
-        "so `!obit` and `!export` can see it too; a month like 2025-11 or a name like november. Or send me `!backfill` in a "
-        "direct message\n"
+        "`/backfill <month>` - fetch one of your own past months (before registering, or one missed) and queue it for analysis: "
+        "`2025-11` or `november`. Or send me `!backfill` in a direct message\n"
         "`!clear` - send it to me in a direct message to delete everything I've sent you there, old messages included\n"
     )
 
@@ -1451,9 +1451,24 @@ async def results(ctx, month: Optional[str] = None):
         await ctx.send(message)
 
 
+HISTORY_HINT = "Send me `!history [username] [site]` in a direct message: it works only there."
+
+
 @bot.command(name="history")
 async def history(ctx, username: Optional[str] = None, site: Optional[str] = None):
-    """A player's months one line each, newest first. Reads only what the bot holds, so no calls to the chess sites."""
+    """A player's months one line each, newest first. Reads only what the bot holds, so no calls to the chess sites.
+    Direct messages only, and only for a registered member who is on the server."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(HISTORY_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
+        return
+    status = await _member_status(ctx.author.id)
+    if status is not True:
+        await _react(ctx, "❌")
+        await ctx.send(_not_a_member_text(status))
+        return
     player = await _pick_player(ctx, username, site, "history")
     if player is None:
         return
