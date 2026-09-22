@@ -180,6 +180,50 @@ def test_analysisq_says_when_analysis_is_off(monkeypatch):
     assert "switched off" in said(ctx)[0]
 
 
+# --- !gamestate ------------------------------------------------------------------------------------------------------------------
+
+def test_gamestate_is_admin_only():
+    assert botmod._admin_only in botmod.gamestate.checks
+
+
+def test_gamestate_finds_the_game_by_link_or_bare_id_and_shows_the_row():
+    member()
+    analysed(spec(1))
+    for game in ("https://lichess.org/00000001", "00000001"):
+        ctx = make_ctx(ADMIN)
+        run(botmod.gamestate, ctx, game)
+        text = said(ctx)[0]
+        assert "<https://lichess.org/00000001>" in text and "Status: done" in text and "Analysed" in text
+
+
+def test_gamestate_finds_anyones_game_not_just_the_admins_own():
+    member(owner=BOB, name="bob_example")                                  # a member, not the admin
+    analysed(spec(1, "bob_example", "x_example"))
+    ctx = make_ctx(ADMIN)
+    run(botmod.gamestate, ctx, "00000001")
+    assert "bob_example" in said(ctx)[0]
+
+
+def test_gamestate_tries_live_and_daily_for_a_bare_chesscom_id():
+    member(site="chess.com")
+    analysed(spec(123456, site="chess.com"))                              # game_id "live/123456" (see analysis_helpers.spec)
+    ctx = make_ctx(ADMIN)
+    run(botmod.gamestate, ctx, "123456")                                  # a bare id: obit.candidates tries live/ and daily/
+    assert "<https://www.chess.com/game/live/123456>" in said(ctx)[0]
+
+
+def test_gamestate_refuses_text_that_is_not_a_game():
+    ctx = make_ctx(ADMIN)
+    run(botmod.gamestate, ctx, "not a game")
+    assert reactions(ctx) == [NO] and "I can't read" in said(ctx)[0]
+
+
+def test_gamestate_says_when_nothing_is_held_for_a_wellformed_id():
+    ctx = make_ctx(ADMIN)
+    run(botmod.gamestate, ctx, "00000001")
+    assert reactions(ctx) == [NO] and said(ctx) == ["I don't hold anything for that game."]
+
+
 # --- !queuemonth ---------------------------------------------------------------------------------------------------------------------
 
 def test_queuemonth_is_admin_only():

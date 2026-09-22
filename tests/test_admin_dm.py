@@ -32,7 +32,7 @@ def passes(user, guild, channel_id, command):
 
 
 def test_the_system_commands_are_named():
-    assert botmod.ADMIN_DM_COMMANDS == ("analysisq", "queuemonth", "closemonth", "setowner", "usage")
+    assert botmod.ADMIN_DM_COMMANDS == ("analysisq", "queuemonth", "closemonth", "setowner", "usage", "gamestate")
     for name in botmod.ADMIN_DM_COMMANDS:
         command = botmod.bot.get_command(name)
         assert command is not None and botmod._admin_only in command.checks                       # each is admin-only in its own right

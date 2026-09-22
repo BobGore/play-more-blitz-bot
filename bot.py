@@ -82,6 +82,7 @@ USAGE = {
     "usage": "!usage [days]",
     "clear": "!clear",
     "setowner": "!setowner <username> <@member> [site]",
+    "gamestate": "!gamestate <game link or id>",
 }
 
 intents = discord.Intents.default()
@@ -348,7 +349,7 @@ async def on_ready():
 
 
 DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory")  # the private commands members can send the bot in a direct message
-ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage")  # system-type commands: an admin's, and only in a direct message
+ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage", "gamestate")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
 
@@ -746,6 +747,27 @@ async def setowner(ctx, username: str, member: discord.User, site: Optional[str]
         await _tick(ctx)
     else:  # removed while we were looking
         await _reject(ctx, f"{player.username} isn't on the list")
+
+
+@bot.command(name="gamestate")
+@commands.check(_admin_only)
+async def gamestate(ctx, game: str):
+    """Admins only: the raw game_analysis row for a game, whoever it belongs to - not the player-facing !obit/!lastgame
+    view. A Lichess or Chess.com game link, or a bare id. For checking on one game directly instead of reading the
+    database by hand."""
+    refs = obit.candidates(game)
+    if not refs:
+        await _reject(ctx, f"I can't read '{sources.shorten(game)}' as a game: give a Lichess or Chess.com game link, or the game's id")
+        return
+    row = None
+    for site, game_id in refs:
+        row = await asyncio.to_thread(obit.game_row, site, game_id)
+        if row is not None:
+            break
+    if row is None:
+        await _reject(ctx, "I don't hold anything for that game.")
+        return
+    await ctx.send(render_analysis.render_gamestate(row))
 
 
 @bot.command(name="usage")

@@ -88,7 +88,7 @@ discord.py does, so that cannot go unnoticed again):
   `!history` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
   anyone who is on the server and registered, their own accounts only), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
-  admin system commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` (admins only). Nothing else.
+  admin system commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
 **Ownership.** `players.added_by` is the Discord ID of the member the account belongs to. "My account" in `!mystats`,
@@ -226,9 +226,14 @@ a whitelist of settings from `.env` and never the Discord token. No shell. The w
 `method_version` at start-up and refuses to run if the two differ, which is why updates are done in a fixed order (section 8).
 
 **Consumers.** `analysis_reports.py` reads the table (`player_games`, `month_summary`, `monthly_accuracy`,
-`waiting_count`) and `render_analysis.py` turns it into text (`!lastgame`, the analysis block of `!mystats`, `!analysisq`).
-`!analysisq` (admin, DM) shows counts by status, the low-priority backlog, how long the oldest game has waited, when each
-worker last asked, and how many games await a re-run.
+`waiting_count`) and `render_analysis.py` turns it into text (`!lastgame`, the analysis block of `!mystats`, `!analysisq`,
+`!gamestate`). `!analysisq` (admin, DM) shows counts by status, the low-priority backlog, how long the oldest game has
+waited, when each worker last asked, and how many games await a re-run. `!gamestate <game link or id>` (admin, DM) is
+the queue-wide equivalent for one game instead of the whole queue: `obit.candidates` reads the link/id the same way
+`!obit` does, `obit.game_row` fetches the row for anyone's game (not just the caller's own, unlike `obit.find_game`),
+and `render_analysis.render_gamestate` prints every column - status, priority, attempts, `last_error`, the queued/
+claimed/analysed timestamps, and, once analysed, both sides' figures and whether `evals`/`clocks`/`moments` are held.
+Built so an admin checking on one game's state doesn't have to open `sqlite3` and write the query by hand.
 
 ## 7. The method
 
@@ -420,7 +425,7 @@ Counts only, 35 days.
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
 | Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!lastgame`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!history`, `!myhistory` (registered members who are on the server) | `/obit`, `/export`, `/backfill` |
-| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` | |
+| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 
 ## 11. Watching over it
@@ -474,6 +479,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 | `/obit` or `/export` not offered | Slash commands weren't registered. | Log line `slash commands registered in <id>: obit, export` at start-up; if it says "Missing Access", re-invite with the `applications.commands` scope; reload Discord. |
 | "I couldn't send you a DM" | The person's privacy setting blocks DMs from server members. | Turn on "Allow direct messages from server members". |
 | `!obit` says it can't find the game | It isn't in the table (played before registering/analysis, or the refresh hasn't seen it yet). | Wait for the next refresh (30 min), run `!obit` with no game (it looks at the sites first), `!queuemonth` for this month, or `!backfill <month>` for a past one. |
+| Need to check one game's own state | Whatever the symptom, before reaching for `sqlite3`. | `!gamestate <link or id>` (admin, DM): the raw row, whoever's game it is. |
 | Games sit in `pending` | No worker asking. | `!analysisq`; see the worker alert row. |
 | Games sit in `claimed` | The worker died mid-batch. | Nothing: after 30 minutes they return to `pending` (5 tries, then `failed`). |
 | Many `failed` | The worker can't analyse them (site down, engine error). | `last_error` in the row; the worker log. To retry: set `status='pending', attempts=0` for those rows, or a member `!obit`s one. |

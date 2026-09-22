@@ -226,3 +226,61 @@ def test_games_waiting_to_be_redone_by_a_newer_method_are_listed_only_when_there
     assert "Waiting to be redone with the newer method: 536" in ra.render_queue_status(status(older_method=536), True)
     assert "redone" not in ra.render_queue_status(status(older_method=0), True)
     assert "redone" not in ra.render_queue_status(status(), True)
+
+
+# --- one game's raw state: !gamestate ---------------------------------------------------------------------------------------------
+
+def gamerow(**over):
+    base = {
+        "site": "lichess", "game_id": "abcd1234", "month": "2026-09", "ended_at": WHEN, "time_control": "300+5",
+        "result": "white", "ending": "resigned", "white_username": "alice_example", "black_username": "rival_example",
+        "white_rating": 1500, "black_rating": 1480, "white_rating_change": 8, "black_rating_change": -8,
+        "status": "done", "skip_reason": None, "priority": 0, "attempts": 1, "last_error": None,
+        "queued_at": WHEN + 10, "claimed_at": WHEN + 20, "claimed_by": "desk1", "analysed_at": WHEN + 30,
+        "engine": "Stockfish 19", "nodes": 200_000, "method_version": 3, "plies": 40, "middle_ply": 14, "end_ply": None, "eval_ply20": 10,
+        "white_accuracy": 88.4, "black_accuracy": 61.5, "white_acc_opening": 95.2, "black_acc_opening": 70.0,
+        "white_acc_middle": 80.5, "black_acc_middle": 55.4, "white_acc_end": None, "black_acc_end": 49.6,
+        "white_inaccuracies": 5, "black_inaccuracies": 7, "white_mistakes": 2, "black_mistakes": 3, "white_blunders": 1, "black_blunders": 0,
+        "white_acpl": 47, "black_acpl": 90, "evals": b"\x00" * 80, "clocks": b"\x00" * 80, "moments": '[[26, "b", 12.5]]',
+    }
+    base.update(over)
+    return base
+
+
+def test_gamestate_shows_the_link_players_result_and_status():
+    text = ra.render_gamestate(gamerow())
+    assert "<https://lichess.org/abcd1234>" in text
+    assert "White alice_example (1500, +8) vs Black rival_example (1480, -8)" in text
+    assert "Result: white by resigned" in text
+    assert "Status: done · priority 0 · attempts 1" in text
+
+
+def test_gamestate_shows_the_skip_reason_and_last_error_when_there_are_some():
+    text = ra.render_gamestate(gamerow(status="failed", skip_reason=None, last_error="engine crashed", analysed_at=None))
+    assert "Status: failed · priority 0" in text and "Last error: engine crashed" in text
+    text = ra.render_gamestate(gamerow(status="skipped", skip_reason="over_monthly_limit", analysed_at=None))
+    assert "Status: skipped (over_monthly_limit)" in text
+
+
+def test_gamestate_shows_who_claimed_it_only_if_someone_has():
+    assert "claimed by" not in ra.render_gamestate(gamerow(claimed_by=None, claimed_at=None, analysed_at=None))
+    assert "claimed by `desk1`" in ra.render_gamestate(gamerow())
+
+
+def test_gamestate_before_analysis_says_so_and_stops_there():
+    text = ra.render_gamestate(gamerow(analysed_at=None, engine=None, nodes=None, method_version=None))
+    assert text.rstrip().endswith("Not analysed yet.") and "Accuracy" not in text and "Evals" not in text
+
+
+def test_gamestate_after_analysis_shows_both_sides_and_the_holdings():
+    text = ra.render_gamestate(gamerow())
+    assert "Analysed" in text and "Stockfish 19" in text and "200,000 nodes" in text and "method v3" in text
+    assert "middlegame from ply 14" in text and "endgame from never" in text
+    lines = panel(text)
+    assert lines[0].split()[:2] == ["alice_example", "(W)"] and lines[0].split()[2:4] == ["rival_example", "(B)"]
+    assert "Evals: yes (80 bytes) · Clocks: yes (80 bytes) · Moments: [[26, \"b\", 12.5]]" in text
+
+
+def test_gamestate_shows_no_for_missing_evals_or_clocks_and_none_for_no_moments():
+    text = ra.render_gamestate(gamerow(evals=None, clocks=None, moments=None))
+    assert "Evals: no (0 bytes) · Clocks: no (0 bytes) · Moments: none" in text

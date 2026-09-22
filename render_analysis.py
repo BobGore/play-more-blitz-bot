@@ -144,3 +144,48 @@ def render_queue_status(status, enabled):
         elif status["workers"][0][1] > STALE_WORKER_SECONDS:
             text += f"\n⚠ The worker last asked for work {duration(status['workers'][0][1])} ago."
     return text
+
+
+def _when(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def render_gamestate(row):
+    """Everything stored for one game (a game_analysis row as a dict, from obit.game_row), for an admin checking on
+    it directly with !gamestate - the raw record, not a player-facing view like render_lastgame/render_obit."""
+    ended = datetime.fromtimestamp(row["ended_at"], timezone.utc)
+    lines = [
+        f"`{row['site']}` `{row['game_id']}` - <{game_records.game_url(row['site'], row['game_id'])}>",
+        f"{ended.day} {ended:%b %Y %H:%M} UTC, {time_control_label(row['time_control'])}, month {row['month']}",
+        f"White {row['white_username']} ({_count(row['white_rating'])}, {_change(row['white_rating_change'])}) vs "
+        f"Black {row['black_username']} ({_count(row['black_rating'])}, {_change(row['black_rating_change'])})",
+        f"Result: {row['result']}" + (f" by {row['ending']}" if row["ending"] else ""),
+        "",
+        f"Status: {row['status']}" + (f" ({row['skip_reason']})" if row["skip_reason"] else "") +
+        f" · priority {row['priority']} · attempts {row['attempts']}",
+        f"Queued {_when(row['queued_at'])}" + (f" · claimed by `{row['claimed_by']}` at {_when(row['claimed_at'])}" if row["claimed_by"] else ""),
+    ]
+    if row["last_error"]:
+        lines.append(f"Last error: {row['last_error']}")
+    if row["analysed_at"] is None:
+        lines.append("Not analysed yet.")
+        return "\n".join(lines)
+    lines.append(f"Analysed {_when(row['analysed_at'])} by {row['engine']} at {row['nodes']:,} nodes a position, method v{row['method_version']}, "
+                 f"{row['plies']} plies (middlegame from ply {row['middle_ply']}, endgame from "
+                 f"{row['end_ply'] if row['end_ply'] is not None else 'never'}), eval after 10 moves {row['eval_ply20']}")
+    header = (f"{render._name(row['white_username'])} (W)", f"{render._name(row['black_username'])} (B)")
+    table_rows = [
+        ("Accuracy", _acc(row["white_accuracy"]), _acc(row["black_accuracy"])),
+        ("  Opening", _acc(row["white_acc_opening"]), _acc(row["black_acc_opening"])),
+        ("  Middlegame", _acc(row["white_acc_middle"]), _acc(row["black_acc_middle"])),
+        ("  Endgame", _acc(row["white_acc_end"]), _acc(row["black_acc_end"])),
+        ("Inaccuracies", _count(row["white_inaccuracies"]), _count(row["black_inaccuracies"])),
+        ("Mistakes", _count(row["white_mistakes"]), _count(row["black_mistakes"])),
+        ("Blunders", _count(row["white_blunders"]), _count(row["black_blunders"])),
+        ("ACPL", _count(row["white_acpl"]), _count(row["black_acpl"])),
+    ]
+    lines.append(f"```\n{_table(header, table_rows)}\n```")
+    lines.append(f"Evals: {'yes' if row['evals'] else 'no'} ({len(row['evals'] or b'')} bytes) · "
+                 f"Clocks: {'yes' if row['clocks'] else 'no'} ({len(row['clocks'] or b'')} bytes) · "
+                 f"Moments: {row['moments'] or 'none'}")
+    return "\n".join(lines)
