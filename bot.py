@@ -10,6 +10,7 @@ import io
 import logging
 import os
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
@@ -76,6 +77,7 @@ USAGE = {
     "lastgame": "!lastgame [username] [site]",
     "obit": "!obit [game link or id]",
     "export": "!export [summary] [period]",
+    "backfill": "!backfill <month>",
     "usage": "!usage [days]",
     "clear": "!clear",
     "setowner": "!setowner <username> <@member> [site]",
@@ -344,7 +346,7 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export", "clear")  # the private commands members can send the bot in a direct message
+DM_COMMANDS = ("obit", "export", "clear", "backfill")  # the private commands members can send the bot in a direct message
 ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
@@ -425,6 +427,9 @@ async def help_blitz_bot(ctx):
         "`/export [period] [what]` - your own games as a CSV file for a spreadsheet, one file per account, sent by DM; period is "
         "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or send me `!export` in a direct "
         "message\n"
+        "`/backfill <month>` - fetch one of your own past months (before you registered, or one analysis missed) and queue it, "
+        "so `!obit` and `!export` can see it too; a month like 2025-11 or a name like november. Or send me `!backfill` in a "
+        "direct message\n"
         "`!clear` - send it to me in a direct message to delete everything I've sent you there, old messages included\n"
     )
 
@@ -1209,6 +1214,99 @@ async def export_slash(interaction: discord.Interaction, period: Optional[str] =
     files = sum(1 for p in parts if "data" in p)
     await interaction.followup.send(f"I've sent you {files} file{'s' if files != 1 else ''} by DM." if files else "There were no games to send.",
                                     ephemeral=True)
+
+
+BACKFILL_HINT = "Use `/backfill`, or send me `!backfill <month>` in a direct message: it only works there."
+BACKFILL_GAP_SECONDS = 60  # between one person's backfills: each one calls out to the chess sites, so slower than !export's gap
+_backfills = {}  # user id -> when they last ran one (monotonic seconds)
+
+
+async def _backfill_flow(user_id, month_text):
+    """!backfill and /backfill up to sending; notes in the log when a request is refused, without the reason (which may
+    quote what the person typed)."""
+    text, error = await _backfill_steps(user_id, month_text)
+    log.info("backfill request from %s: %s", user_id, "refused" if error else "done")
+    return text, error
+
+
+async def _backfill_steps(user_id, month_text):
+    """Fetch one of the caller's own past months from its site and queue it for analysis - the same thing !queuemonth
+    does for everyone's current month, but for one person and any month, including from before they registered or
+    before analysis was switched on. Returns (text, error): `error` is text saying why not, else None."""
+    accounts = await asyncio.to_thread(store.accounts_of, user_id)
+    if not accounts:
+        return None, "you haven't added an account yet - use `!add <username> <site>` in the server's channel first"
+    if not settings.ANALYSIS_ENABLED:
+        return None, "analysis is switched off (`ANALYSIS_ENABLED`)"
+    if not month_text:
+        return None, "tell me which month, e.g. `!backfill 2025-11` or `!backfill november`"
+    current = sources.current_month()
+    month = monthargs.parse_month(month_text, current)
+    if month is None:
+        return None, f"I don't know the month '{sources.shorten(month_text)}': try a name like `november` or a month like `2025-11`"
+    if monthargs.is_future(month, current):
+        return None, f"{datetime.strptime(month, '%Y-%m').strftime('%B %Y')} hasn't happened yet"
+    last = _backfills.get(user_id)
+    if last is not None and _monotonic() - last < BACKFILL_GAP_SECONDS:
+        return None, "one backfill at a time please: try again in a minute"
+    _backfills[user_id] = _monotonic()
+    now = datetime.now(timezone.utc)
+    outcome = Counter()
+    failures = []
+    async with aiohttp.ClientSession() as session:
+        for account in accounts:
+            try:
+                games = await sources.month_games(session, account.site, account.username, month)
+            except sources.SourceError as exc:
+                failures.append((account.username, account.site, str(exc)))
+                continue
+            except Exception:
+                log.exception("backfill: could not fetch %s's games on %s", account.username, account.site)
+                failures.append((account.username, account.site, "unexpected error, see the log"))
+                continue
+            result = await analysis_feed.feed(account.site, account.username, games, now)
+            if result:
+                outcome.update(result)
+    queued = outcome[analysis_queue.QUEUED] + outcome[analysis_queue.QUEUED_LOW]
+    text = (f"{datetime.strptime(month, '%Y-%m').strftime('%B %Y')}: queued {queued} game(s) for analysis "
+            f"({outcome[analysis_queue.ALREADY_QUEUED]} were already queued, {outcome[analysis_queue.OVER_LIMIT]} over the monthly limit).")
+    if failures:
+        text += "\nCouldn't do: " + "; ".join(f"{name} ({site}): {sources.shorten(why, 80)}" for name, site, why in failures)
+    return text, None
+
+
+@bot.command(name="backfill")
+async def backfill_command(ctx, month: Optional[str] = None):
+    """Fetch one of your own past months from its site and queue it for analysis, same as !queuemonth does for everyone's
+    current month. For games from before you registered, or a month analysis missed. Direct messages only, and only for a
+    registered member who is on the server. `!backfill <month>`, e.g. `!backfill november` or `!backfill 2025-11`."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(BACKFILL_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
+        return
+    status = await _member_status(ctx.author.id)
+    text, error = (None, _not_a_member_text(status)) if status is not True else await _backfill_flow(ctx.author.id, month)
+    await _react(ctx, "❌" if error else "✅")
+    try:
+        await ctx.send(error or text)
+    except discord.HTTPException as exc:
+        log.warning("couldn't answer a direct message (%s)", exc.status)
+
+
+@bot.tree.command(name="backfill", description="Fetch one of your past months and queue it for analysis")
+@app_commands.describe(month="A month like 2025-11 or november")
+@app_commands.guild_only()
+async def backfill_slash(interaction: discord.Interaction, month: str):
+    """The same as !backfill, but nothing appears in the channel: the only reply is one only the person asking can see."""
+    if interaction.channel_id not in ALLOWED_CHANNEL_IDS:
+        await interaction.response.send_message("This command only works in the blitz channel.", ephemeral=True)
+        return
+    await _count("backfill", interaction.user.id)
+    await interaction.response.defer(ephemeral=True)  # fetching a month from the chess sites can take longer than Discord waits for a reply
+    text, error = await _backfill_flow(interaction.user.id, month)
+    await interaction.followup.send(error or text, ephemeral=True)
 
 
 CLEAR_HINT = "Send me `!clear` in a direct message: it clears what I've sent you there, so it isn't done in the channel."

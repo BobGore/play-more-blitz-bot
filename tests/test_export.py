@@ -528,8 +528,9 @@ def test_the_command_checks_let_a_dm_run_export_and_obit_only():
             return all([await discord.utils.maybe_coroutine(check, ctx) for check in botmod.bot._checks])
         return asyncio.run(run_all())
     assert passes(None, DM_CHANNEL, "export") is True and passes(None, DM_CHANNEL, "obit") is True and passes(None, DM_CHANNEL, "results") is False
+    assert passes(None, DM_CHANNEL, "backfill") is True
     assert passes(SimpleNamespace(id=1), CHANNEL, "export") is True and passes(SimpleNamespace(id=1), CHANNEL + 1, "export") is False
-    assert botmod.DM_COMMANDS == ("obit", "export", "clear")
+    assert botmod.DM_COMMANDS == ("obit", "export", "clear", "backfill")
 
 
 # --- /export ---------------------------------------------------------------------------------------------------------------------------------------

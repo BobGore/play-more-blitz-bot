@@ -84,9 +84,9 @@ the bot was invited without the `applications.commands` scope: re-authorise it (
 discord.py does, so that cannot go unnoticed again):
 
 - In a server: only in `ALLOWED_CHANNEL_IDS`, and never the system commands.
-- In a DM to the bot: `!obit` and `!export` (for anyone who is on the server and registered), `!clear` (deletes the bot's
-  own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the admin system
-  commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` (admins only). Nothing else.
+- In a DM to the bot: `!obit`, `!export` and `!backfill` (for anyone who is on the server and registered), `!clear`
+  (deletes the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there),
+  and the admin system commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
 **Ownership.** `players.added_by` is the Discord ID of the member the account belongs to. "My account" in `!mystats`,
@@ -97,8 +97,8 @@ the server; non-admins keep to one account per site).
 **Membership.** "On the server" is checked with `guild.fetch_member`. In a DM the check is strict: not confirmed means
 refused. For an action that isn't a DM (`!add @member`, delivering a queued review) only a confirmed "not a member" blocks.
 
-**Keeping the channel quiet.** `!obit` and `!export` reply by DM; `/obit` and `/export` answer only the person who asked
-(ephemeral). Admin commands are DM-only. The bot never pings anyone by default (`AllowedMentions.none()`), except the one
+**Keeping the channel quiet.** `!obit`, `!export` and `!backfill` reply by DM; `/obit`, `/export` and `/backfill` answer
+only the person who asked (ephemeral). Admin commands are DM-only. The bot never pings anyone by default (`AllowedMentions.none()`), except the one
 person whose review couldn't be delivered.
 
 **In memory only:** the per-player game cache behind `!mystats` (`gamecache.py`, bounded, lost on restart), the alert rate
@@ -389,6 +389,11 @@ for the period (this month, last, week, a month, all), oldest first, analysed or
 UTF-8 with a BOM (Excel), CRLF, text cells beginning with `= + - @` are defused against spreadsheet formulas. One export
 per person per 30 s. Nothing is stored: files are made on request.
 
+**`!backfill <month>` / `/backfill <month>`** — the same fetch-and-queue `analysis_feed.feed` does for a freshly finished
+game, but for one person's own accounts and a month they name (not the current month, which the refresher already keeps
+up with): games from before they registered, or a month analysis missed. One call to the person's site per account, so
+one backfill per person per 60 s. Queued games go through the same monthly limit tiers as any other (`analysis_queue.queue_games`).
+
 **`!usage`** — `usage.py`: counts per day of each command, the distinct people seen, errors, reviews and exports sent.
 Counts only, 35 days.
 
@@ -396,7 +401,7 @@ Counts only, 35 days.
 
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
-| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!history`, `!lastgame`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export` (registered members who are on the server) | `/obit`, `/export` |
+| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!history`, `!lastgame`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill` (registered members who are on the server) | `/obit`, `/export`, `/backfill` |
 | Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 
@@ -450,7 +455,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 | Every `!` command is ignored in the channel | The `@bot.check` decorator isn't on `_in_allowed_channel`. | `tests/test_obit.py` covers this; fix the decorator. |
 | `/obit` or `/export` not offered | Slash commands weren't registered. | Log line `slash commands registered in <id>: obit, export` at start-up; if it says "Missing Access", re-invite with the `applications.commands` scope; reload Discord. |
 | "I couldn't send you a DM" | The person's privacy setting blocks DMs from server members. | Turn on "Allow direct messages from server members". |
-| `!obit` says it can't find the game | It isn't in the table (played before registering/analysis, or the refresh hasn't seen it yet). | Wait for the next refresh (30 min) or run `!obit` with no game (it looks at the sites first); `!queuemonth` backfills this month. |
+| `!obit` says it can't find the game | It isn't in the table (played before registering/analysis, or the refresh hasn't seen it yet). | Wait for the next refresh (30 min), run `!obit` with no game (it looks at the sites first), `!queuemonth` for this month, or `!backfill <month>` for a past one. |
 | Games sit in `pending` | No worker asking. | `!analysisq`; see the worker alert row. |
 | Games sit in `claimed` | The worker died mid-batch. | Nothing: after 30 minutes they return to `pending` (5 tries, then `failed`). |
 | Many `failed` | The worker can't analyse them (site down, engine error). | `last_error` in the row; the worker log. To retry: set `status='pending', attempts=0` for those rows, or a member `!obit`s one. |
@@ -481,9 +486,11 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 
 ## 14. Decisions and limits
 
-- History begins at registration; no backfill except the current month. Data is kept indefinitely (a "forget me" or drop
-  command is not built; opponents' usernames are kept as part of the public game record).
-- Analysis covers games played since it was switched on (plus `!queuemonth` for the current month).
+- History otherwise begins at registration, except that any registered member can pull in one of their own past months with
+  `!backfill`/`/backfill` (one month at a time; the site's own archive is the limit, not registration date). Data is kept
+  indefinitely (a "forget me" or drop command is not built; opponents' usernames are kept as part of the public game record).
+- Analysis covers games played since it was switched on (plus `!queuemonth` for the current month, or `!backfill` for a
+  past one, per person).
 - **Time-management reference curves for other time controls** (3+1, 3+2, 5+3, 5+5, ...): the reference in check 5 was measured on 3+0 and 5+0 games only, so other controls get no pace line. Deriving more is a planned development (same method: average the fraction of the base time left at each move over many public games of one time control).
 - Not built yet: takeaway tick-list and weekly `!obit` review, awards (weekly/monthly best game, most gained, and so on),
   a game-shape label, direct Google Sheets writing, a "forget me" command, deactivating accounts of people who leave the
