@@ -498,6 +498,11 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 - History otherwise begins at registration, except that any registered member can pull in one of their own past months with
   `!backfill`/`/backfill` (one month at a time; the site's own archive is the limit, not registration date). Data is kept
   indefinitely (a "forget me" or drop command is not built; opponents' usernames are kept as part of the public game record).
+- **`!backfill` is personal, on purpose.** It only feeds `game_analysis` (so `!obit`/`!export` can see the games); it never
+  touches `monthly_results`, so `!results`, `!history` and 100GOB are unaffected - a backfilled month never appears in the
+  channel's standings or a player's `!history` table, and can't retroactively join a past month's 100GOB. This is
+  deliberate, not a gap: `!backfill` is scoped to what one person can see about their own games, same as `!obit`/`!export`,
+  and is not a way to edit the shared record everyone else sees.
 - Analysis covers games played since it was switched on (plus `!queuemonth` for the current month, or `!backfill` for a
   past one, per person).
 - **Time-management reference curves for other time controls** (3+1, 3+2, 5+3, 5+5, ...): the reference in check 5 was measured on 3+0 and 5+0 games only, so other controls get no pace line. Deriving more is a planned development (same method: average the fraction of the base time left at each move over many public games of one time control).
