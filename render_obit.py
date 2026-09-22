@@ -53,10 +53,7 @@ TURNING = 10  # points of winning chance one move must cost to be the game's tur
 MAX_MOMENTS = 5  # how many of the player's own flagged moves are listed under Blunders
 
 
-def move_label(ply):
-    """A ply as a chess move number: ply 1 is "1.", ply 2 is "1...", ply 45 is "23.", ply 46 is "23...". The dots mark Black's move."""
-    number = (ply + 1) // 2  # two plies to a move number
-    return f"{number}." if ply % 2 else f"{number}..."
+move_label = render.move_label  # moved to render.py so render_analysis.py (!gamestate) can use it too; kept as a name here for callers below
 
 
 def _win(score, side):

@@ -4,6 +4,7 @@ picture of the queue. Pure functions: they take the rows analysis_reports and an
 
 from datetime import datetime, timedelta, timezone
 
+import analysis
 import game_records
 import render
 from openings import opening_family
@@ -186,6 +187,16 @@ def render_gamestate(row):
     ]
     lines.append(f"```\n{_table(header, table_rows)}\n```")
     lines.append(f"Evals: {'yes' if row['evals'] else 'no'} ({len(row['evals'] or b'')} bytes) · "
-                 f"Clocks: {'yes' if row['clocks'] else 'no'} ({len(row['clocks'] or b'')} bytes) · "
-                 f"Moments: {row['moments'] or 'none'}")
+                 f"Clocks: {'yes' if row['clocks'] else 'no'} ({len(row['clocks'] or b'')} bytes)")
+    moments = analysis.moments_from_json(row["moments"]) if row["moments"] else ()
+    if not moments:
+        lines.append("Moments: none flagged.")
+    else:
+        lines.append(f"Moments ({len(moments)}), game order - each is the move that lost the points, not the position shown at the link:")
+        for m in sorted(moments, key=lambda m: m.ply):  # game order, not worst-first, for checking against a claimed move number
+            side = "White" if m.ply % 2 else "Black"
+            text = f"  {render.move_label(m.ply)} {side} {m.verdict}, -{m.lost:.1f}%"
+            if row["site"] == "lichess":  # Chess.com's link doesn't reliably open at a move
+                text += f"  <{game_records.game_url(row['site'], row['game_id'], m.ply - 1)}>"
+            lines.append(text)
     return "\n".join(lines)

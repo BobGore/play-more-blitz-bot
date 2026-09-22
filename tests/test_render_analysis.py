@@ -278,9 +278,22 @@ def test_gamestate_after_analysis_shows_both_sides_and_the_holdings():
     assert "middlegame from ply 14" in text and "endgame from never" in text
     lines = panel(text)
     assert lines[0].split()[:2] == ["alice_example", "(W)"] and lines[0].split()[2:4] == ["rival_example", "(B)"]
-    assert "Evals: yes (80 bytes) · Clocks: yes (80 bytes) · Moments: [[26, \"b\", 12.5]]" in text
+    assert "Evals: yes (80 bytes) · Clocks: yes (80 bytes)" in text
+    assert "Moments (1), game order" in text
+    assert "13... Black blunder, -12.5%  <https://lichess.org/abcd1234#25>" in text
 
 
 def test_gamestate_shows_no_for_missing_evals_or_clocks_and_none_for_no_moments():
     text = ra.render_gamestate(gamerow(evals=None, clocks=None, moments=None))
-    assert "Evals: no (0 bytes) · Clocks: no (0 bytes) · Moments: none" in text
+    assert "Evals: no (0 bytes) · Clocks: no (0 bytes)" in text and "Moments: none flagged." in text
+
+
+def test_gamestate_lists_several_moments_in_game_order_not_worst_first():
+    text = ra.render_gamestate(gamerow(moments='[[38, "b", 26.6], [10, "i", 5.8], [25, "b", 32.7]]'))
+    got = [line.strip().split("  ")[0] for line in text.split("\n") if line.strip().startswith(("5.", "13", "19"))]
+    assert got == ["5... Black inaccuracy, -5.8%", "13. White blunder, -32.7%", "19... Black blunder, -26.6%"]
+
+
+def test_gamestate_has_no_link_for_a_chesscom_game():
+    text = ra.render_gamestate(gamerow(site="chess.com", game_id="live/1"))
+    assert "13..." in text and "<https://" not in text.split("Moments")[1]

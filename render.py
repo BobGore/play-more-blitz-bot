@@ -356,6 +356,14 @@ def _fit(text):
 fit = _fit  # for callers outside this module that need to cut a long text into messages
 
 
+def move_label(ply):
+    """A ply as a chess move number: ply 1 is "1.", ply 2 is "1...", ply 45 is "23.", ply 46 is "23...". The dots mark
+    Black's move. Shared by render_obit.py (moved here, not duplicated, so render_analysis.py can use it too without
+    render_analysis importing render_obit, which would be circular: render_obit already imports render_analysis)."""
+    number = (ply + 1) // 2  # two plies to a move number
+    return f"{number}." if ply % 2 else f"{number}..."
+
+
 # --- history: !history ------------------------------------------------------------------------------------------------
 
 
