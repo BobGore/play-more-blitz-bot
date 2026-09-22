@@ -497,3 +497,44 @@ def test_an_empty_queue_has_an_empty_status():
     s = q.status(NOW)
     assert s["counts"] == {"pending": 0, "claimed": 0, "done": 0, "skipped": 0, "failed": 0}
     assert s["oldest_pending_seconds"] is None and s["workers"] == [] and s["low_priority_pending"] == 0
+
+
+# --- the clocks --------------------------------------------------------------------------------------------------------------------------
+
+def test_a_result_with_clocks_stores_them_and_one_without_stores_none():
+    claimed_game()
+    packed = analysis.pack_clocks([300.0 - i for i in range(60)])
+    assert q.submit("desk", [result(clocks=packed)], NOW + 5)[0][2] == q.ACCEPTED
+    assert by_id("g00001")["clocks"] == packed
+    claimed_game(n=2)
+    assert q.submit("desk", [result("g00002")], NOW + 5)[0][2] == q.ACCEPTED
+    assert by_id("g00002")["clocks"] is None
+
+
+@pytest.mark.parametrize("clocks", [b"", b"\x00" * 118, b"\x00" * 122, "text", [1, 2]])
+def test_clocks_of_the_wrong_size_or_kind_are_refused(clocks):
+    claimed_game()
+    (report,) = q.submit("desk", [result(clocks=clocks)], NOW + 5)
+    assert report[2] == q.REJECTED and report[3] == "clocks must be two bytes for each ply, or null" and by_id("g00001")["status"] == q.CLAIMED
+
+
+def test_a_newer_method_replaces_an_older_result_and_brings_its_clocks():
+    claimed_game()
+    q.submit("desk", [result(method_version=2)], NOW + 5)
+    assert by_id("g00001")["clocks"] is None
+    packed = analysis.pack_clocks([200.0] * 60)
+    assert q.submit("desk", [result(method_version=3, clocks=packed)], NOW + 9)[0][2] == q.ACCEPTED
+    assert by_id("g00001")["clocks"] == packed and by_id("g00001")["method_version"] == 3
+
+
+def test_the_clocks_column_is_added_to_a_table_made_before_it_existed(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(store.SCHEMA)
+    conn.execute("ALTER TABLE game_analysis DROP COLUMN clocks")
+    conn.commit()
+    conn.close()
+    store.DB_PATH = path
+    with store.transaction() as conn:
+        assert "clocks" in {r["name"] for r in conn.execute("PRAGMA table_info(game_analysis)")}

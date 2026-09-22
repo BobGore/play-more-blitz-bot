@@ -28,6 +28,7 @@ class GameData:
     moves: tuple  # SAN moves in order
     site_white_accuracy: float | None  # the site's own figure, when it has one
     site_black_accuracy: float | None
+    clocks: tuple | None = None  # the seconds left on the mover's clock after each ply, one per move; None if the site gave none
 
 
 def _accuracy(value):
@@ -38,6 +39,31 @@ def _checked(moves, min_plies):
     if len(moves) < min_plies:
         raise NotAnalysable(TOO_SHORT, f"only {len(moves)} moves")
     return tuple(moves)
+
+
+def _lichess_clocks(raw, plies):
+    """Lichess gives the clock after each ply in centiseconds (`clocks=true`); it may list one more than there are plies.
+    None unless every ply has a sound value."""
+    clocks = raw.get("clocks")
+    if not isinstance(clocks, list) or len(clocks) < plies:
+        return None
+    values = clocks[:plies]
+    if any(not isinstance(v, int) or isinstance(v, bool) or v < 0 for v in values):
+        return None
+    return tuple(v / 100 for v in values)
+
+
+_CLK = re.compile(r"\[%clk (\d+):(\d\d):(\d\d(?:\.\d+)?)\]")
+
+
+def _pgn_clocks(pgn, plies):
+    """Chess.com writes the clock after each move as `{[%clk 0:04:58.2]}`. None unless there is exactly one for every ply
+    (a daily game has none)."""
+    text = pgn.split("\n\n", 1)[1] if "\n\n" in pgn else pgn
+    found = _CLK.findall(text)
+    if len(found) != plies:
+        return None
+    return tuple(int(h) * 3600 + int(m) * 60 + float(s) for h, m, s in found)
 
 
 def from_lichess(raw, min_plies=MIN_PLIES):
@@ -53,7 +79,8 @@ def from_lichess(raw, min_plies=MIN_PLIES):
         raise NotAnalysable(UNAVAILABLE, "the export has no moves")
     players = raw.get("players") or {}
     figures = {colour: ((players.get(colour) or {}).get("analysis") or {}).get("accuracy") for colour in ("white", "black")}
-    return GameData(_checked(moves.split(), min_plies), _accuracy(figures["white"]), _accuracy(figures["black"]))
+    checked = _checked(moves.split(), min_plies)
+    return GameData(checked, _accuracy(figures["white"]), _accuracy(figures["black"]), _lichess_clocks(raw, len(checked)))
 
 
 _COMMENT = re.compile(r"\{[^}]*\}")
@@ -87,7 +114,8 @@ def from_chesscom(raw, min_plies=MIN_PLIES):
     if _pgn_header(pgn, "SetUp") == "1" and _pgn_header(pgn, "FEN") not in (None, STANDARD_START):
         raise NotAnalysable(NOT_STANDARD_START, "the game does not start from the standard position")
     accuracies = raw.get("accuracies") or {}
-    return GameData(_checked(moves_from_pgn(pgn), min_plies), _accuracy(accuracies.get("white")), _accuracy(accuracies.get("black")))
+    checked = _checked(moves_from_pgn(pgn), min_plies)
+    return GameData(checked, _accuracy(accuracies.get("white")), _accuracy(accuracies.get("black")), _pgn_clocks(pgn, len(checked)))
 
 
 def find_chesscom_game(archive, game_id):

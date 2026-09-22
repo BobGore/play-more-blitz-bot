@@ -312,3 +312,28 @@ def test_an_attempt_to_run_a_shell_command_through_the_request_does_nothing(depl
         done = run_deployed(home, request)
         assert done.returncode == 1
     assert not marker.exists()
+
+
+# --- the clocks --------------------------------------------------------------------------------------------------------------------------
+
+def test_clocks_arrive_as_base64_and_are_stored_as_bytes_and_a_game_without_them_stores_none():
+    register("alice_example")
+    q.queue_games([game(1), game(2)], NOW)
+    ask("claim 2")
+    packed = analysis.pack_clocks([300.0 - i for i in range(40)])
+    got = ask("submit", {"results": [result("g00001", clocks=base64.b64encode(packed).decode()), result("g00002", clocks=None)]})
+    assert [a["outcome"] for a in got] == ["accepted", "accepted"]
+    with store.transaction() as conn:
+        rows = {r["game_id"]: r["clocks"] for r in conn.execute("SELECT game_id, clocks FROM game_analysis")}
+    assert rows["g00001"] == packed and rows["g00002"] is None
+
+
+@pytest.mark.parametrize("clocks", ["not base64!!", 12345, ["a"], {"a": 1}])
+def test_clocks_that_are_not_base64_text_are_refused_and_the_game_stays_claimed(clocks):
+    register("alice_example")
+    q.queue_games([game(1)], NOW)
+    ask("claim 1")
+    (answer,) = ask("submit", {"results": [result(clocks=clocks)]})
+    assert answer["outcome"] == "rejected" and answer["detail"] == "clocks must be base64 text or null"
+    with store.transaction() as conn:
+        assert conn.execute("SELECT status FROM game_analysis").fetchone()["status"] == "claimed"

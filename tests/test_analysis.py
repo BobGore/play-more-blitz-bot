@@ -280,3 +280,25 @@ def test_a_long_game_uses_the_widest_window():
     cps = [int(120 * math.sin(i / 4)) - 3 * i + (400 if i == 60 else 0) - (350 if i == 85 else 0) for i in range(110)]
     result = analysis.game_accuracy(True, cps)
     assert result["white"] == pytest.approx(96.449, abs=0.001) and result["black"] == pytest.approx(97.784, abs=0.001)
+
+
+# --- the clocks ----------------------------------------------------------------------------------------------------------------------
+
+def test_the_method_is_version_three_because_the_clocks_are_now_kept():
+    assert analysis.METHOD_VERSION == 3
+
+
+def test_clocks_round_trip_in_tenths_of_a_second_two_bytes_a_ply():
+    seconds = [300.0, 299.5, 12.3, 0.0, 6553.5]
+    blob = analysis.pack_clocks(seconds)
+    assert len(blob) == 10 and analysis.unpack_clocks(blob) == seconds
+
+
+def test_clocks_are_rounded_to_a_tenth_and_kept_in_range():
+    assert analysis.unpack_clocks(analysis.pack_clocks([1.26, 1.24, -5, 99999999])) == [1.3, 1.2, 0.0, 6553.5]
+
+
+def test_no_clocks_pack_to_nothing_and_a_damaged_blob_is_refused():
+    assert analysis.pack_clocks([]) == b"" and analysis.unpack_clocks(b"") == []
+    with pytest.raises(ValueError):
+        analysis.unpack_clocks(b"\x01")

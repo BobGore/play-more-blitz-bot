@@ -18,7 +18,7 @@ import statistics
 import struct
 from dataclasses import dataclass
 
-METHOD_VERSION = 2  # raised whenever a change to the method would change the figures or what is kept, so older rows can be re-run
+METHOD_VERSION = 3  # raised whenever a change to the method would change the figures or what is kept, so older rows can be re-run
 # (2: each game also keeps the plies of the moves called inaccuracies, mistakes and blunders)
 INITIAL_CP = 15
 CAP = 1000  # accuracy treats every evaluation as at most this many centipawns, and a forced mate as exactly this
@@ -243,6 +243,21 @@ def unpack_evals(blob):
         else:
             scores.append(("cp", value))
     return scores
+
+
+_CLOCK_LIMIT = 65535  # tenths of a second in two bytes: about 109 minutes, far more than any blitz clock
+
+
+def pack_clocks(seconds):
+    """The clock after each ply (the seconds left to the player who has just moved) as two bytes each, in tenths of a second."""
+    return struct.pack(f"<{len(seconds)}H", *(max(0, min(_CLOCK_LIMIT, int(round(s * 10)))) for s in seconds))
+
+
+def unpack_clocks(blob):
+    """The packed clocks as seconds, one per ply."""
+    if len(blob) % 2:
+        raise ValueError("packed clocks have two bytes per ply")
+    return [value / 10 for (value,) in struct.iter_unpack("<H", blob)]
 
 
 # --- keeping the flagged moves ----------------------------------------------------------------------------

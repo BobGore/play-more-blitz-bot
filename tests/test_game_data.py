@@ -155,3 +155,51 @@ def test_a_game_that_is_not_there_is_not_found_and_a_longer_number_does_not_matc
     assert gd.find_chesscom_game(ARCHIVE, "live/999") is None
     assert gd.find_chesscom_game({}, "live/1") is None
     assert gd.find_chesscom_game({"games": []}, "live/1") is None
+
+
+# --- the clocks ---------------------------------------------------------------------------------------------------------------------
+
+def test_lichess_clocks_are_read_as_seconds_one_per_ply():
+    centiseconds = [30003, 30003, 29955, 29875, 29907, 29731, 29500, 29410, 29020, 29000]
+    assert gd.from_lichess(lichess(clocks=centiseconds)).clocks == tuple(v / 100 for v in centiseconds)
+
+
+def test_lichess_may_list_one_clock_more_than_there_are_plies_and_the_extra_is_dropped():
+    centiseconds = list(range(30000, 30011))                                               # 11 for 10 plies
+    assert gd.from_lichess(lichess(clocks=centiseconds)).clocks == tuple(v / 100 for v in centiseconds[:10])
+
+
+@pytest.mark.parametrize("clocks", [None, "30003", [30003] * 9, [30003] * 9 + [-1], [30003] * 9 + [1.5], [30003] * 9 + [True], [30003] * 9 + ["5"], {}])
+def test_lichess_clocks_that_are_missing_short_or_unsound_give_none(clocks):
+    raw = lichess() if clocks is None else lichess(clocks=clocks)
+    assert gd.from_lichess(raw).clocks is None
+
+
+def test_a_lichess_game_with_zero_clock_values_is_still_a_game_with_clocks():
+    assert gd.from_lichess(lichess(clocks=[0] * 10)).clocks == (0.0,) * 10
+
+
+def test_chesscom_clocks_come_from_the_clk_comments_in_move_order():
+    assert gd.from_chesscom(chesscom()).clocks == (302.6, 303.9, 294.3, 307.9, 290.0, 300.1, 280.0, 299.9, 270.0, 298.0)
+
+
+def test_chesscom_clocks_in_hours_and_whole_seconds_are_read():
+    pgn = PGN.replace("[%clk 0:05:02.6]", "[%clk 1:02:03.4]").replace("[%clk 0:05:03.9]", "[%clk 0:04:58]")
+    assert gd.from_chesscom(chesscom(pgn=pgn)).clocks[:2] == (3723.4, 298.0)
+
+
+def test_chesscom_clocks_are_none_unless_there_is_one_for_every_ply():
+    assert gd.from_chesscom(chesscom(pgn=PGN.replace(" {[%clk 0:04:58.0]}", ""))).clocks is None                # 9 of 10
+    assert gd.from_chesscom(chesscom(pgn=PGN.replace("Be7 $6 {[%clk 0:04:58.0]}", "Be7 {[%clk 0:04:58.0]} {[%clk 0:04:57.0]}"))).clocks is None   # 11 of 10
+    no_clocks = "\n\n".join([PGN.split("\n\n")[0], "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 1-0"])
+    assert gd.from_chesscom(chesscom(pgn=no_clocks)).clocks is None                                              # a daily game: no clocks
+
+
+def test_a_clock_looking_thing_in_the_headers_is_not_counted():
+    header, body = PGN.split("\n\n")
+    tricked = header + '\n[Note "[%clk 0:00:01]"]\n\n' + body
+    assert gd.from_chesscom(chesscom(pgn=tricked)).clocks == gd.from_chesscom(chesscom()).clocks
+
+
+def test_a_game_data_built_without_clocks_has_none():
+    assert gd.GameData(("e4",) * 6, None, None).clocks is None

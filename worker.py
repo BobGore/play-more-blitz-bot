@@ -235,7 +235,7 @@ class Http:
             if wait > 0:
                 self.sleep(wait)
         request = urllib.request.Request(
-            "https://lichess.org/api/games/export/_ids?moves=true&tags=false&clocks=false&evals=false&opening=false&accuracy=true&pgnInJson=false",
+            "https://lichess.org/api/games/export/_ids?moves=true&tags=false&clocks=true&evals=false&opening=false&accuracy=true&pgnInJson=false",
             data=",".join(ids).encode(), method="POST",
             headers={"User-Agent": self.agent, "Accept": "application/x-ndjson", "Content-Type": "text/plain"})
         try:
@@ -339,6 +339,14 @@ def _bitboards(board):
     return (board.occupied, board.kings, board.pawns, board.occupied_co[chess.WHITE], board.occupied_co[chess.BLACK])
 
 
+def _packed_clocks(data, plies):
+    """The game's clocks as base64 for the result, or None if the site gave none (or not one for every ply)."""
+    clocks = getattr(data, "clocks", None)
+    if clocks is None or len(clocks) != plies:
+        return None
+    return base64.b64encode(analysis.pack_clocks(clocks)).decode("ascii")
+
+
 def make_result(job, data, run, engine_name, nodes):
     """The result dict the gateway's `submit` takes, for one analysed game."""
     scores, bests, played, positions = run
@@ -357,6 +365,7 @@ def make_result(job, data, run, engine_name, nodes):
         "end_ply": end,
         "eval_ply20": summary.eval_ply20,
         "evals": base64.b64encode(analysis.pack_evals(scores)).decode("ascii"),
+        "clocks": _packed_clocks(data, len(scores)),
         "moments": analysis.moments_to_lists(summary.moments),
         "white": dataclasses.asdict(summary.white),
         "black": dataclasses.asdict(summary.black),

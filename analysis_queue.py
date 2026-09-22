@@ -179,6 +179,9 @@ def _problem(r):
         evals = r["evals"]
         if not isinstance(evals, (bytes, bytearray)) or len(evals) != 2 * plies:
             return "evals must be two bytes for each ply"
+        clocks = r.get("clocks")
+        if clocks is not None and (not isinstance(clocks, (bytes, bytearray)) or len(clocks) != 2 * plies):
+            return "clocks must be two bytes for each ply, or null"
         for colour in ("white", "black"):
             side = r[colour]
             for field in _SIDE_FIELDS:
@@ -247,7 +250,7 @@ def _store_result(conn, r, now):
     conn.execute(
         """
         UPDATE game_analysis SET status = ?, skip_reason = NULL, last_error = NULL, claimed_by = NULL, analysed_at = ?,
-            engine = ?, nodes = ?, method_version = ?, plies = ?, middle_ply = ?, end_ply = ?, eval_ply20 = ?, evals = ?, moments = ?,
+            engine = ?, nodes = ?, method_version = ?, plies = ?, middle_ply = ?, end_ply = ?, eval_ply20 = ?, evals = ?, clocks = ?, moments = ?,
             white_accuracy = ?, black_accuracy = ?, white_acc_opening = ?, black_acc_opening = ?,
             white_acc_middle = ?, black_acc_middle = ?, white_acc_end = ?, black_acc_end = ?,
             white_inaccuracies = ?, black_inaccuracies = ?, white_mistakes = ?, black_mistakes = ?,
@@ -256,7 +259,7 @@ def _store_result(conn, r, now):
         WHERE site = ? AND game_id = ?
         """,
         (DONE, now, r["engine"], r["nodes"], r["method_version"], r["plies"], r["middle_ply"], r["end_ply"], r["eval_ply20"],
-         bytes(r["evals"]), json.dumps(sorted(r["moments"]), separators=(",", ":")),
+         bytes(r["evals"]), None if r.get("clocks") is None else bytes(r["clocks"]), json.dumps(sorted(r["moments"]), separators=(",", ":")),
          w["accuracy"], b["accuracy"], w["acc_opening"], b["acc_opening"], w["acc_middle"], b["acc_middle"], w["acc_end"], b["acc_end"],
          w["inaccuracies"], b["inaccuracies"], w["mistakes"], b["mistakes"], w["blunders"], b["blunders"], w["acpl"], b["acpl"],
          r.get("site_white_accuracy"), r.get("site_black_accuracy"), r["site"], r["game_id"]))

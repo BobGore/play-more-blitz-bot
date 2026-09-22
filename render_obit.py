@@ -19,6 +19,9 @@ row and words it. The parts of the row it uses:
   accuracy    the row's `<side>_accuracy` overall and `_acc_opening / _acc_middle / _acc_end` by phase (0-100).
   eval_ply20  the evaluation after ply 20 (10 moves each), centipawns, White's view.
   the game    result, how it ended, time control, the site's own opening name and ECO code, both usernames and ratings.
+  clocks      the seconds left on the mover's clock after every ply, when the site gave them (Chess.com and Lichess live games do;
+              a daily game or a game analysed before the clocks were kept has none). They give the Time section and two notes under
+              Interesting; all the clock rules are in clock_review.py.
 
 TWO SCALES, used together
 -------------------------
@@ -36,6 +39,7 @@ The review is written from the point of view of the player asked about (`side`):
 from datetime import datetime, timezone
 
 import analysis
+import clock_review
 import game_records
 import render
 import render_analysis
@@ -110,6 +114,39 @@ def _swing(moment, side, scores):
 def _mine(moment, side):
     """True if the flagged move was made by `side`: White plays the odd plies, Black the even ones."""
     return (moment.ply % 2 == 1) == (side == "white")
+
+
+def _clock_data(row):
+    """(clocks, base, increment) for the game if it has usable clocks, else None: the site must have given a clock for every ply, and
+    the time control must be "base+increment" in seconds (a daily game's isn't)."""
+    blob = row.get("clocks")
+    control = clock_review.parse_time_control(row["time_control"])
+    if not blob or control is None:
+        return None
+    try:
+        clocks = analysis.unpack_clocks(blob)
+    except ValueError:
+        return None
+    return clocks, control[0], control[1]
+
+
+def _time_part(row, side):
+    """The Time section, the wiki's time-graph checks worded for this game, or "" if the game has no clocks. One line per check, each
+    with an icon: ✓ good, ⚠ worth a look, • information. What each check means is in clock_review.py."""
+    data = _clock_data(row)
+    outcome = render_analysis._outcome(row, side)
+    on_time = outcome if row["ending"] == "timeout" and outcome in ("won", "lost") else None  # a game decided by a flag falling
+    found = clock_review.checks(data[0], side, data[1], data[2], on_time=on_time) if data else []
+    if not found:
+        return ""
+    head = f"**Time** — {render_analysis.time_control_label(row['time_control'])}, from the clocks after every move"
+    return head + "\n" + "\n".join(f"{c.icon} {c.text}" for c in found) + "\n"
+
+
+def _clock_notes(row, side, moments):
+    """The two Interesting notes that set the clock against the engine's verdict: your longest think, and mistakes played fast."""
+    data = _clock_data(row)
+    return clock_review.interesting_notes(data[0], side, data[1], data[2], moments) if data else []
 
 
 def _opening_part(row, side):
@@ -251,7 +288,7 @@ def render_obit(username, site, row, side):
     """The messages for the OBIT of the analysed game `row` (a game_analysis row as a dict) from `side`'s point of view.
 
     Put together in this order: the heading (who, where, when, time control, and the result in words, with a link to the game),
-    O, B, I, then T (a prompt only: the takeaway is the player's to write; a tick-list is planned) and a note that the figures are
+    O, B, the Time section (only when the game has clocks), I (the engine-based notes, then the clock-based ones), then T (a prompt only: the takeaway is the player's to write; a tick-list is planned) and a note that the figures are
     the bot's own estimate. Long reviews are split into several messages, never in the middle of a part (render._pack)."""
     theirs = "black" if side == "white" else "white"
     outcome = render_analysis._outcome(row, side)
@@ -268,7 +305,10 @@ def render_obit(username, site, row, side):
     moments = analysis.moments_from_json(row["moments"])  # both sides' flagged moves; empty for a game analysed before they were kept
     scores = _scores(row)
     parts = [title, _opening_part(row, side), _blunder_part(row, side, moments, scores, site)]
-    interesting = _interesting(row, side, moments, scores)
+    time_part = _time_part(row, side)  # only when the site gave the clocks
+    if time_part:
+        parts.append(time_part)
+    interesting = _interesting(row, side, moments, scores) + _clock_notes(row, side, moments)
     parts.append("**I · Interesting**\n" + ("\n".join(f"• {line}" for line in interesting) if interesting else "Nothing unusual: a steady game.") + "\n")
     parts.append("**T · Takeaway** — over to you: what is the one thing you'll do differently next time?\n")
     parts.append(f"Analysed by {row['engine']} at {row['nodes']:,} nodes a position: the bot's own estimate, so treat it as a guide. "

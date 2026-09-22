@@ -43,8 +43,8 @@ def row_of(n=1, *, site="lichess", **result_over):
     """The analysis-table row of game n after analysing it (both sides at the default figures unless overridden)."""
     if store.get_player(site, "alice_example") is None:
         register("alice_example", site=site)
-    extra = {k: result_over.pop(k) for k in ("ending", "result", "opening_site", "eco_site", "white", "black") if k in result_over}
-    spec_extra = {k: extra[k] for k in ("ending", "result", "opening_site", "eco_site") if k in extra}
+    extra = {k: result_over.pop(k) for k in ("ending", "result", "opening_site", "eco_site", "time_control", "white", "black") if k in result_over}
+    spec_extra = {k: extra[k] for k in ("ending", "result", "opening_site", "eco_site", "time_control") if k in extra}
     analysed(spec(n, site=site, **spec_extra), white=extra.get("white"), black=extra.get("black"), **result_over)
     game_id = f"{n:08d}" if site == "lichess" else f"live/{n}"
     return obit.game_row(site, game_id)
@@ -1402,3 +1402,126 @@ def test_of_two_chances_given_back_equally_the_earlier_one_is_named():
     row = with_moments(row_of(1, evals=curve(0)), [[8, "b", 20.0], [9, "i", 8.0], [14, "b", 25.0], [15, "i", 8.0]])
     (note,) = [n for n in notes_of(row) if "answered by your own" in n]
     assert note.startswith("Your opponent's blunder on 4... (−20%) was answered by your own inaccuracy on 5. (−8%)") and note.endswith("It happened 2 times.")
+
+
+# --- the clocks: the Time section and the two notes -----------------------------------------------------------------------------------------------
+
+def clocks_blob(white, black, base=300, inc=0, plies=40):
+    """The packed clocks (analysis.pack_clocks) of a game where White's moves took `white` seconds and Black's `black`, padded to `plies` plies."""
+    clocks, w, b = [], float(base), float(base)
+    for i in range(plies // 2):
+        w = w - (white[i] if i < len(white) else 1) + inc
+        b = b - (black[i] if i < len(black) else 1) + inc
+        clocks += [w, b]
+    return analysis.pack_clocks(clocks)
+
+
+def clock_row(white=(3,) * 20, black=(3,) * 20, time_control="300+0", figures=None, **over):
+    """An analysed game with clocks. `white` and `black` are how long each side's moves took; `figures` is (white side, black side) of
+    analysis figures if the test wants its own."""
+    blob = clocks_blob(list(white), list(black), *[int(x) for x in time_control.split("+")]) if "/" not in time_control else clocks_blob(list(white), list(black))
+    if figures:
+        over["white"], over["black"] = figures
+    return row_of(1, time_control=time_control, clocks=blob, **over)
+
+
+def test_a_game_with_clocks_gets_a_time_section_between_blunders_and_interesting():
+    text = review(clock_row())
+    assert text.index("**B ·") < text.index("**Time**") < text.index("**I ·")
+    assert "**Time** — 5+0, from the clocks after every move" in text
+    lines = section_between(text, "**Time**", "**I ·")
+    assert "✓ Opening (your first 10 moves): 30s = 10% of base time — nicely quick" in lines
+    assert any(l.startswith("✓ You never hit serious time trouble") for l in lines)
+
+
+def section_between(text, start, end):
+    return text[text.index(start): text.index(end)].split("\n")
+
+
+def test_the_time_section_lists_every_check_with_its_icon():
+    lines = section_between(review(clock_row()), "**Time**", "**I ·")
+    icons = [l[0] for l in lines[1:] if l]
+    assert set(icons) <= {"✓", "⚠", "•"} and len(icons) >= 6
+
+
+def test_a_game_without_clocks_has_no_time_section_and_no_clock_notes():
+    text = review(row_of(1))                                                      # analysed with no clocks, as before the clocks were kept
+    assert "**Time**" not in text and "longest think" not in text
+
+
+def test_a_daily_game_has_no_time_section_even_if_it_has_a_blob():
+    text = review(clock_row(time_control="1/86400"))
+    assert "**Time**" not in text
+
+
+def test_a_damaged_clock_blob_is_left_out_not_fatal():
+    row = clock_row()
+    row["clocks"] = b"\x01"
+    text = review(row)
+    assert "**Time**" not in text and "**I ·" in text
+
+
+def test_the_time_section_is_from_the_players_side():
+    white = review(clock_row(white=(3,) * 20, black=(20,) * 20))
+    black = review(clock_row(white=(3,) * 20, black=(20,) * 20), "black", username="rival_example")
+    assert "Opening (your first 10 moves): 30s" in white and "Opening (your first 10 moves): 3m 20s" in black
+
+
+def test_a_long_think_is_named_under_interesting_with_the_engines_verdict():
+    row = clock_row(white=[3] * 5 + [45] + [3] * 14)                              # move 6 (ply 11) took 45 s
+    with_slip = with_moments(row, [[11, "b", 22.0]])
+    notes = notes_of(with_slip)
+    assert "Your longest think was 6. (45s, 15% of your base time): it ended in a blunder (−22%). What were you stuck on?" in notes
+    held = with_moments(row, [])
+    assert "Your longest think was 6. (45s, 15% of your base time): the move held up, so the time was well spent. What made the position hard?" in notes_of(held)
+
+
+def test_fast_slips_are_named_under_interesting():
+    row = clock_row(white=[3] * 20)
+    slipped = with_moments(row, [[11, "m", 12.0], [13, "b", 20.0]])
+    assert any(n.startswith("You played 2 of your 2 mistakes and blunders in under 5 seconds") for n in notes_of(slipped))
+
+
+def test_the_clock_notes_come_after_the_engine_ones():
+    row = with_moments(clock_row(white=[3] * 5 + [45] + [3] * 14), [[12, "b", 25.0], [11, "b", 22.0]])          # their blunder (ply 12), then yours (ply 11)
+    notes = notes_of(row)
+    engine = next(i for i, n in enumerate(notes) if n.startswith("Your opponent made"))
+    clock = next(i for i, n in enumerate(notes) if n.startswith("Your longest think"))
+    assert engine < clock
+
+
+def test_a_timed_game_with_nothing_to_note_is_still_a_steady_game():
+    quiet = side(inaccuracies=0, mistakes=0, blunders=0)
+    row = clock_row(figures=(quiet, quiet), evals=curve(0))
+    assert "Nothing unusual: a steady game." in review(row) and "**Time**" in review(row)
+
+
+def test_the_review_still_fits_in_discords_messages_with_the_time_section():
+    messages = render_obit.render_obit("alice_example", "lichess", clock_row(), "white")
+    assert all(len(m) <= 2000 for m in messages)
+
+
+def test_a_game_won_on_time_says_so_and_never_says_you_finished_behind():
+    text = review(clock_row(white=(3,) * 20, black=(1,) * 20, ending="timeout", result="white"))                 # White (the player) slower on the clock, then wins on time
+    assert "You won on time: your opponent's clock ran out, although at the last readings you were" in text and "finished behind" not in text
+
+
+def test_a_game_lost_on_time_says_your_clock_ran_out():
+    text = review(clock_row(ending="timeout", result="black"))
+    assert "You lost on time: your clock ran out" in text and "You won on time" not in text
+
+
+def test_the_time_result_is_told_from_blacks_side():
+    text = review(clock_row(white=(1,) * 20, black=(3,) * 20, ending="timeout", result="black"), "black", username="rival_example")
+    assert "You won on time: your opponent's clock ran out, although at the last readings you were" in text
+
+
+def test_a_draw_that_ended_on_time_is_compared_as_usual():
+    text = review(clock_row(ending="timeout", result="draw"))
+    time_section = text[text.index("**Time**"):text.index("**I ·")]
+    assert "You won on time" not in time_section and "You lost on time" not in time_section and "The clocks finished level" in time_section
+
+
+def test_the_time_section_judges_the_final_lead_of_a_game_that_did_not_end_on_time():
+    resigned = review(clock_row(ending="resigned", result="white"))
+    assert "The game ended on time" not in resigned and "The clocks finished level" in resigned

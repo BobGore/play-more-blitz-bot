@@ -10,7 +10,7 @@ program understands only these, nothing else and no shell:
 
     hello              the protocol version, our method version and the server's clock
     claim N            up to N games to analyse (N from 1 to 100), as a JSON list
-    submit             finished analyses as JSON on standard input, {"results": [...]}, each with `evals` as base64
+    submit             finished analyses as JSON on standard input, {"results": [...]}, each with `evals` (and `clocks`, if the site gave them) as base64
     release            games given back as JSON on standard input, {"releases": [{"site", "game_id", "skip_reason", "error"}]}
 
 Everything printed is one line of JSON. A request that can't be understood prints {"error": "..."} and exits with
@@ -84,7 +84,16 @@ def _decode_evals(result):
         decoded = None
     if decoded is None:
         return None, "evals must be base64 text"
-    return {**result, "evals": decoded}, None
+    out = {**result, "evals": decoded}
+    clocks = result.get("clocks")  # optional: a game the site gave no clocks for has none
+    if clocks is not None:
+        try:
+            out["clocks"] = base64.b64decode(clocks, validate=True) if isinstance(clocks, str) else None
+        except (binascii.Error, ValueError):
+            out["clocks"] = None
+        if out["clocks"] is None:
+            return None, "clocks must be base64 text or null"
+    return out, None
 
 
 def handle(worker, request, stdin, now, queue):

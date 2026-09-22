@@ -783,3 +783,28 @@ def test_a_game_with_errors_sends_its_flagged_moves_and_they_agree_with_its_coun
     assert q._problem({**result, "evals": base64.b64decode(result["evals"])}) is None
     assert result["moments"] == analysis.moments_to_lists(analysis.summarise(run[0], result["middle_ply"], result["end_ply"], run[1], run[2]).moments)
     json.dumps(result)
+
+
+# --- the clocks ----------------------------------------------------------------------------------------------------------------------
+
+def test_lichess_is_asked_for_the_clocks():
+    log = []
+    w.Http("", 30, 0, opener=opener(json.dumps({"id": "abcd1234", "moves": "e4"}), log=log)).lichess_games(["abcd1234"])
+    assert "clocks=true" in log[0][0].full_url and "clocks=false" not in log[0][0].full_url
+
+
+def test_a_result_carries_the_games_clocks_as_base64_and_passes_the_queues_own_checks():
+    clocks = tuple(300 - i * 1.5 for i in range(20))
+    data = gd.GameData(tuple(RUY), None, None, clocks)
+    result = w.make_result(JOB, data, w.analyse_moves(material, RUY), "E", 1)
+    packed = base64.b64decode(result["clocks"])
+    assert analysis.unpack_clocks(packed) == [round(c, 1) for c in clocks]
+    assert q._problem({**result, "evals": base64.b64decode(result["evals"]), "clocks": packed}) is None
+    json.dumps(result)
+
+
+def test_a_game_without_clocks_or_with_the_wrong_number_of_them_sends_none():
+    run = w.analyse_moves(material, RUY)
+    assert w.make_result(JOB, gd.GameData(tuple(RUY), None, None), run, "E", 1)["clocks"] is None
+    assert w.make_result(JOB, gd.GameData(tuple(RUY), None, None, (300.0,) * 19), run, "E", 1)["clocks"] is None
+    assert w.make_result(JOB, gd.GameData(tuple(RUY), None, None, (300.0,) * 21), run, "E", 1)["clocks"] is None

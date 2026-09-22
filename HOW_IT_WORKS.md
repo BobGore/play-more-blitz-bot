@@ -127,9 +127,9 @@ start with no migration step. Column additions to old tables are in `store._migr
 (`status`, `skip_reason`, `priority`, `attempts`, `last_error`, `queued_at`, `claimed_at`, `claimed_by`, `analysed_at`);
 the run (`engine`, `nodes`, `method_version`, `plies`); the figures per side (`*_accuracy`, `*_acc_opening/middle/end`,
 `*_inaccuracies/mistakes/blunders`, `*_acpl`); `middle_ply`, `end_ply`, `eval_ply20` (engine score after 10 moves,
-centipawns, White's view); `evals` (the score after every ply, packed two bytes each); `moments` (JSON list of
+centipawns, White's view); `evals` (the score after every ply, packed two bytes each); `clocks` (the mover's clock after every ply, in tenths of a second, two bytes each; NULL if the site gave none: a daily game, or a game analysed before method 3); `moments` (JSON list of
 `[ply, "i"|"m"|"b", points lost]`, both sides); `site_*_accuracy` (the site's own numbers, kept apart); `shape` (unused).
-**The moves themselves are never stored.**
+**The moves themselves are never stored** (the clocks are: they say how long each move took, not what it was).
 
 **Looking inside** (on the Minix; the file is where `PLAYMOREBLITZ_DB` in `.env` says):
 
@@ -175,7 +175,7 @@ The path of one game, and every place it can stop:
  2 refresh (30 min) or !add or !queuemonth or /obit's "look at the sites" fetches it
  3 analysis_feed.feed → game_records.record → analysis_queue.queue_games   → row in game_analysis, status "pending"
  4 worker asks (SSH → worker_gateway "claim N")                             → status "claimed" (attempts+1)
- 5 worker fetches the game from the site itself (moves live in its memory only)
+ 5 worker fetches the game from the site itself (moves live in its memory only; the clocks come with it and are kept)
  6 worker: standard start? long enough? → else "release" with a skip reason → status "skipped"
  7 Stockfish evaluates every position (200,000 nodes each) → analysis.summarise → figures + moments
  8 worker "submit" (evals base64, in chunks ≤ 60,000 characters)             → validated (analysis_queue._problem)
@@ -230,7 +230,7 @@ worker last asked, and how many games await a re-run.
 ## 7. The method
 
 `analysis.py` follows the method Lichess publishes for its computer analysis, so numbers read on the same scale.
-`METHOD_VERSION` (now 2) is raised whenever a change alters the figures or what is kept; older rows are then re-analysed.
+`METHOD_VERSION` (now 3: version 3 added the clocks) is raised whenever a change alters the figures or what is kept; older rows are then re-analysed.
 
 - Scores are `("cp", n)` or `("mate", n)` from White's point of view. The start position counts as 15 centipawns.
 - **Win %** = 50 + 50·(2 / (1 + e^(−0.00368208·cp)) − 1), with the evaluation capped at ±1000 centipawns (a mate is the cap).
@@ -315,7 +315,8 @@ cost" and "was I clearly winning" are decided. It is not a straight line:
 | Heading | Who, site, date, time control; "You won by timeout as White against …" and a link | The row's usernames, ratings, `ended_at`, `time_control`, `result`, `ending`. |
 | **O**pening | The opening family and ECO; accuracy overall and by phase; the weakest phase; the score after 10 moves each | Name and ECO are the *site's* own (`opening_family` tidies the two sites' spellings). Accuracy is the worker's 0-100 figure for the player's moves (a phase the game never reached shows "-"). "Weakest phase" appears only if two or more phases are known and best and worst are 8+ points apart. "After 10 moves each" is `eval_ply20`, from the player's side. |
 | **B**lunders | Both sides' counts; the player's worst moments | Counts are the row's totals. Each listed moment is one of the player's own flagged moves, biggest loss first (ties: earliest), at most 5: "• 11. inaccuracy, −6% (+0.8 → +0.1)" = move 11, an inaccuracy that gave away 6 points of winning chance, the engine's score going from +0.8 before the move (the score after the ply before it) to +0.1 after it. What the move *was* is not known: moves aren't stored. Lichess lines link to the position *before* the move. |
-| **I**nteresting | Up to five notes, or "Nothing unusual" | Six tests, below. |
+| **Time** (only when the game has clocks) | Seven checks on how the time was spent, each with an icon (✓ good, ⚠ worth a look, • information) | `clock_review.py`; see "The Time section" below. |
+| **I**nteresting | Up to seven notes, or "Nothing unusual" | Six tests on the evaluation, below, and two on the clock. |
 | **T**akeaway | A prompt | Nothing computed: the takeaway is the player's to write (a tick-list is planned). |
 
 **How "Interesting" is decided.** Every test works on the player's winning chance after each ply (`curve`), from the engine's scores. There is
@@ -339,6 +340,30 @@ no clock data, so the clock test is a proxy. (`NOT_WORSE` = 45%, `CLEARLY` = 75%
 
 Tests 2 and 3 can't both hold unless the game was drawn and test 1 needs a decisive result, so at most five notes appear. None holding is a
 normal, steady game. Tests 4 to 6 use only the flagged moves and the evaluation curve, so they need no clock data.
+
+**The two clock notes under Interesting** set the clock against the engine's verdict on the same move (they need the clocks, so they
+appear only when the game has them): **your longest think**, if it took over 10% of the base time (Nate Solon's "a position where you got
+stuck"): "it ended in a blunder (−22%). What were you stuck on?" or "the move held up, so the time was well spent"; and **fast slips**: your
+mistakes and blunders played in under 5 seconds, how many and the quickest.
+
+**The Time section** (`clock_review.py`, from the clocks the sites give after every move). A move's time is the mover's clock before it (the
+base for a first move, otherwise their previous clock) minus the clock after it, plus the increment; White plays the odd plies. The rules and
+thresholds are those of the time graph in the owner's chess-journal wiki (all named constants at the top of the file), plus the seventh check:
+
+| # | Check | Rule |
+| --- | --- | --- |
+| 1 | Opening speed | Your first 10 moves' time as a share of the base: 15% or less ✓ "nicely quick"; over 25% ⚠ "too slow"; between, •. |
+| 2 | Longest thinks | Your three slowest moves; ⚠ if one alone took over 10% of the base. Then, if you made 15+ moves, whether two of the three fell in moves 15-25 (the middlegame). |
+| 3 | Blitzed moves | Of your moves after move 12 (needs at least 5): ⚠ if over 40% took under 5 seconds. |
+| 4 | Time trouble | ⚠ at the first move where your clock fell below 10% of the base; otherwise ✓. |
+| 5 | Pace against a strong player | Your clock at each move against a reference curve: the average fraction of the base time a strong blitz player had left at that move (94 rated 3+0 and 5+0 games, Chess.com, July 2026, from the wiki). Only for 3+0 and 5+0 games. ⚠ if you were ever more than 15% of the base behind; ✓ if ahead throughout or close. |
+| 6 | Total | Time you used against your opponent's and your budget (base plus increment per move); what was left at the end; • if you used under 45% of the budget. |
+| 7 | Pace against your opponent | The clock lead (your clock minus theirs) after each move both made, shown at moves 10, 20, 30 and the end. One sentence: a lead of over 3% of the base that slipped into a deficit (⚠), a deficit won back (✓), or who finished ahead or behind by over 3% (✓ or ⚠); otherwise "the clocks finished level". If the game was decided on time it says which: "You won on time: your opponent's clock ran out" (with "although at the last readings you were 29s behind" if the last readings had you behind by over 3%), or "You lost on time: your clock ran out": a clock is only read after each move, so the last reading can't say whose time ran out, but the result can. |
+
+**How the clocks get here.** The worker asks Lichess for them (`clocks=true`) and reads Chess.com's `[%clk …]` comments; `game_data.py` turns
+both into one number per ply (or None if any ply lacks one). The worker sends them base64-encoded beside the evaluations, `worker_gateway.py`
+decodes them, `analysis_queue.py` checks there are exactly two bytes per ply and stores them. Because this changed what is kept the method
+became version 3, so every game analysed before is re-analysed once (the worker re-fetches it) and gains its clocks.
 
 **A real example** (names changed; a 21-ply game White won when Black's flag fell). The stored evaluations after each ply were
 `+20 +16 +18 +35 +29 +33 +34 +42 +4 +1 -6 +26 0 +6 +6 +61 +64 +157 +89 +76 +9` centipawns, and the flagged moves `(16, inaccuracy, 5.0)`,
@@ -459,6 +484,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 - History begins at registration; no backfill except the current month. Data is kept indefinitely (a "forget me" or drop
   command is not built; opponents' usernames are kept as part of the public game record).
 - Analysis covers games played since it was switched on (plus `!queuemonth` for the current month).
+- **Time-management reference curves for other time controls** (3+1, 3+2, 5+3, 5+5, ...): the reference in check 5 was measured on 3+0 and 5+0 games only, so other controls get no pace line. Deriving more is a planned development (same method: average the fraction of the base time left at each move over many public games of one time control).
 - Not built yet: takeaway tick-list and weekly `!obit` review, awards (weekly/monthly best game, most gained, and so on),
   a game-shape label, direct Google Sheets writing, a "forget me" command, deactivating accounts of people who leave the
   server, an alert that says the bot is back.
@@ -478,7 +504,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 | `analysis.py`, `divider.py` | The method (accuracy, judgement, phases, moments, packing) |
 | `worker.py`, `worker_gateway.py`, `game_data.py` | The EliteDesk worker, the Minix gateway it calls, reading a game from a site |
 | `analysis_reports.py`, `render_analysis.py` | Reading the analysis for display |
-| `obit.py`, `render_obit.py` | Reviews: reading a game reference, own games, requests; the review text |
+| `obit.py`, `render_obit.py`, `clock_review.py` | Reviews: reading a game reference, own games, requests; the review text; the clock checks (how the time was spent) |
 | `export_data.py` | CSV exports |
 | `monitoring.py`, `usage.py` | Alerts logic and counts of use |
 | `singleton.py` | The lock (`playmoreblitz.lock` beside the code) that stops a second copy of the bot starting from the same folder |
