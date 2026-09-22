@@ -110,6 +110,22 @@ def test_mate_scores_that_are_not_a_mistake_give_no_verdict(prev, cur, white):
     assert analysis.judgement(prev, cur, white) is None
 
 
+# --- deciding whether a moment is worth a deeper look -----------------------------------------------------------
+
+@pytest.mark.parametrize("lost, expected", [
+    (0, False), (2.9, False), (3, True), (5, True), (7, True), (7.1, False),
+    (7.9, False), (8, True), (10, True), (12, True), (12.1, False),
+    (12.9, False), (13, True), (15, True), (17, True), (17.1, False), (100, False),
+])
+def test_borderline_is_within_the_margin_of_any_threshold(lost, expected):
+    assert analysis.is_borderline(lost) is expected
+
+
+def test_the_margin_leaves_clear_water_between_the_three_bands():
+    # comfortably between two bands, or outside all three: never worth the deeper look
+    assert not any(analysis.is_borderline(x) for x in (0, 1, 7.5, 12.5, 20, 30))
+
+
 # --- accuracy of a whole run of moves -------------------------------------------------------------------------
 
 def test_a_game_where_nothing_ever_changes_is_perfect_for_both_sides():
@@ -189,6 +205,32 @@ def test_the_engines_own_best_move_is_never_called_an_error():
     bests[7] = "c5f2"  # and something else at ply 8
     s = analysis.summarise(GAME, 4, 8, bests=bests, played=played)
     assert s.white.blunders == 1 and s.black.inaccuracies == 1
+
+
+# --- replacing a summary's moments (the deeper re-check plugs its corrected moments back in through this) ------
+
+def test_with_moments_recomputes_the_counts_on_both_sides():
+    s = analysis.summarise(GAME, middle=4, end=8)  # white: 1 blunder; black: 1 inaccuracy
+    corrected = analysis.with_moments(s, (analysis.Moment(5, "mistake", 12.0),))  # white's ply 5 downgraded, black's ply 8 dropped
+    assert (corrected.white.inaccuracies, corrected.white.mistakes, corrected.white.blunders) == (0, 1, 0)
+    assert (corrected.black.inaccuracies, corrected.black.mistakes, corrected.black.blunders) == (0, 0, 0)
+    assert corrected.moments == (analysis.Moment(5, "mistake", 12.0),)
+
+
+def test_with_moments_leaves_accuracy_and_acpl_alone():
+    s = analysis.summarise(GAME, middle=4, end=8)
+    corrected = analysis.with_moments(s, ())
+    assert (corrected.white.accuracy, corrected.white.acpl) == (s.white.accuracy, s.white.acpl)
+    assert (corrected.black.accuracy, corrected.black.acpl) == (s.black.accuracy, s.black.acpl)
+    assert corrected.eval_ply20 == s.eval_ply20
+
+
+def test_with_moments_on_an_empty_tuple_clears_every_count():
+    s = analysis.summarise(GAME, middle=4, end=8)
+    corrected = analysis.with_moments(s, ())
+    assert (corrected.white.inaccuracies, corrected.white.mistakes, corrected.white.blunders) == (0, 0, 0)
+    assert (corrected.black.inaccuracies, corrected.black.mistakes, corrected.black.blunders) == (0, 0, 0)
+    assert corrected.moments == ()
 
 
 def test_the_evaluation_after_ten_moves_each_is_kept():
@@ -284,8 +326,8 @@ def test_a_long_game_uses_the_widest_window():
 
 # --- the clocks ----------------------------------------------------------------------------------------------------------------------
 
-def test_the_method_is_version_three_because_the_clocks_are_now_kept():
-    assert analysis.METHOD_VERSION == 3
+def test_the_method_is_version_four_because_borderline_moments_are_now_rechecked_deeper():
+    assert analysis.METHOD_VERSION == 4
 
 
 def test_clocks_round_trip_in_tenths_of_a_second_two_bytes_a_ply():

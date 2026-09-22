@@ -129,6 +129,67 @@ def test_a_mate_game_carries_its_mate_into_the_curve():
     assert analysis.unpack_evals(base64.b64decode(result["evals"]))[-1] == ("mate", 1) and result["plies"] == 7
 
 
+# --- the deeper re-check of a borderline moment -----------------------------------------------------------------------------
+
+RECHECK_MOVES = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"]  # 6 legal plies; only their number and legality matter here
+
+
+def borderline_summary(*moments):
+    empty = analysis.Side(accuracy=90.0, acc_opening=90.0, acc_middle=None, acc_end=None, inaccuracies=0, mistakes=0, blunders=0, acpl=10)
+    return analysis.Summary(white=empty, black=empty, eval_ply20=None, moments=moments)
+
+
+class DeepEngine:
+    """Ignores the board it's given: replies with whatever's next in `replies`, in order."""
+
+    def __init__(self, replies):
+        self.replies, self.nodes_seen = list(replies), []
+
+    def evaluate(self, board, token, nodes=None):
+        self.nodes_seen.append(nodes)
+        return self.replies.pop(0), None
+
+
+def test_a_borderline_moment_is_replaced_by_what_the_deeper_look_finds():
+    prev, cur = ("cp", 0), ("cp", -60)  # a real inaccuracy, not the blunder the fast pass thought it saw
+    engine = DeepEngine([prev, cur])
+    summary = borderline_summary(analysis.Moment(3, "blunder", 15.0))  # ply 3: White's move, right on the blunder line
+    result = w.recheck_borderline(engine, RECHECK_MOVES, summary, 2_250_000)
+    expected_lost = round(analysis.lost_points(prev, cur, True), 1)
+    assert result.moments == (analysis.Moment(3, "inaccuracy", expected_lost),)
+    assert (result.white.inaccuracies, result.white.blunders) == (1, 0)
+    assert engine.nodes_seen == [2_250_000, 2_250_000]
+
+
+def test_a_moment_cleared_by_the_deeper_look_is_dropped_not_just_downgraded():
+    engine = DeepEngine([("cp", 0), ("cp", 0)])  # no swing at all once looked at properly
+    summary = borderline_summary(analysis.Moment(3, "blunder", 15.0))
+    result = w.recheck_borderline(engine, RECHECK_MOVES, summary, 2_250_000)
+    assert result.moments == () and (result.white.inaccuracies, result.white.mistakes, result.white.blunders) == (0, 0, 0)
+
+
+def test_a_moment_nowhere_near_a_threshold_is_left_alone_and_never_reaches_the_engine():
+    engine = DeepEngine([])  # would raise IndexError if asked for anything
+    summary = borderline_summary(analysis.Moment(5, "blunder", 40.0))  # miles from any of the three lines
+    result = w.recheck_borderline(engine, RECHECK_MOVES, summary, 2_250_000)
+    assert result.moments == (analysis.Moment(5, "blunder", 40.0),) and engine.nodes_seen == []
+
+
+def test_mixed_moments_only_the_borderline_one_is_rechecked():
+    engine = DeepEngine([("cp", 0), ("cp", -60)])
+    summary = borderline_summary(analysis.Moment(3, "blunder", 15.0), analysis.Moment(5, "blunder", 40.0))
+    result = w.recheck_borderline(engine, RECHECK_MOVES, summary, 2_250_000)
+    assert [m.ply for m in result.moments] == [3, 5] and result.moments[0].verdict == "inaccuracy" and result.moments[1].verdict == "blunder"
+
+
+def test_make_result_only_rechecks_when_given_both_an_engine_and_a_recheck_budget():
+    data = gd.GameData(tuple(RUY), None, None)
+    run = w.analyse_moves(material, RUY)
+    plain = w.make_result(JOB, data, run, "E", 1234)  # the old call shape: no recheck at all
+    with_engine_but_no_budget = w.make_result(JOB, data, run, "E", 1234, FakeEngine(), 0)
+    assert plain["moments"] == with_engine_but_no_budget["moments"]
+
+
 # --- a batch, start to finish, against the real queue -------------------------------------------------------------------------
 
 class Direct:
@@ -606,6 +667,16 @@ def test_the_engine_is_opened_when_first_needed_configured_and_asked_for_nodes(m
         assert opened[0][1]["creationflags"] == subprocess.BELOW_NORMAL_PRIORITY_CLASS
 
 
+def test_a_nodes_override_replaces_the_configured_budget_for_one_call(monkeypatch):
+    fake = FakeUci([info(chess.engine.Cp(1)), info(chess.engine.Cp(2))])
+    patch_uci(monkeypatch, fake)
+    engine = w.Engine("sf.exe", 1, 16, 50_000, 30.0)
+    token = object()
+    engine.evaluate(chess.Board(), token, nodes=9_000_000)
+    engine.evaluate(chess.Board(), token)  # no override: back to the configured budget
+    assert [limit.nodes for limit, _ in fake.analysed] == [9_000_000, 50_000]
+
+
 def test_scores_are_always_from_whites_side_and_mates_keep_their_sign(monkeypatch):
     replies = [{"score": chess.engine.PovScore(chess.engine.Cp(50), chess.BLACK), "pv": []},
                {"score": chess.engine.PovScore(chess.engine.Mate(3), chess.WHITE), "pv": [chess.Move.from_uci("d2d4")]},
@@ -641,6 +712,7 @@ def test_the_defaults_and_the_required_settings():
     c = w.load_config(GOOD)
     assert (c.gateway_target, c.gateway_key, c.stockfish_path) == ("user@host", "/k", "/sf")
     assert (c.engine_threads, c.engine_hash_mb, c.nodes, c.batch_size, c.idle_sleep, c.min_plies, c.lichess_interval) == (8, 512, 200_000, 20, 300.0, 6, 2.0)
+    assert c.recheck_nodes == 2_250_000
     for name in GOOD:
         with pytest.raises(w.ConfigError) as why:
             w.load_config({k: v for k, v in GOOD.items() if k != name})
@@ -648,9 +720,11 @@ def test_the_defaults_and_the_required_settings():
 
 
 def test_settings_can_be_changed_and_bad_ones_are_named():
-    c = w.load_config({**GOOD, "ENGINE_THREADS": "4", "NODES_PER_POSITION": "100000", "LICHESS_MIN_INTERVAL_SECONDS": "0", "CONTACT": " a-contact "})
-    assert (c.engine_threads, c.nodes, c.lichess_interval, c.contact) == (4, 100_000, 0.0, "a-contact")
-    for name, value in (("ENGINE_THREADS", "many"), ("ENGINE_THREADS", "0"), ("NODES_PER_POSITION", "5"), ("BATCH_SIZE", "-1"), ("IDLE_SLEEP_SECONDS", "0")):
+    c = w.load_config({**GOOD, "ENGINE_THREADS": "4", "NODES_PER_POSITION": "100000", "RECHECK_NODES": "0",
+                       "LICHESS_MIN_INTERVAL_SECONDS": "0", "CONTACT": " a-contact "})
+    assert (c.engine_threads, c.nodes, c.recheck_nodes, c.lichess_interval, c.contact) == (4, 100_000, 0, 0.0, "a-contact")
+    for name, value in (("ENGINE_THREADS", "many"), ("ENGINE_THREADS", "0"), ("NODES_PER_POSITION", "5"), ("RECHECK_NODES", "-1"),
+                        ("BATCH_SIZE", "-1"), ("IDLE_SLEEP_SECONDS", "0")):
         with pytest.raises(w.ConfigError) as why:
             w.load_config({**GOOD, name: value})
         assert name in str(why.value)

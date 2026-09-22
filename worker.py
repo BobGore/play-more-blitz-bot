@@ -41,8 +41,8 @@ _MONTH = re.compile(r"^[0-9]{4}-[0-9]{2}$")
 # --- settings -----------------------------------------------------------------------------------------------------
 
 SETTING_NAMES = ("GATEWAY_TARGET", "GATEWAY_KEY", "STOCKFISH_PATH", "ENGINE_THREADS", "ENGINE_HASH_MB", "NODES_PER_POSITION",
-                 "SECONDS_PER_POSITION_LIMIT", "BATCH_SIZE", "IDLE_SLEEP_SECONDS", "MIN_PLIES", "LICHESS_MIN_INTERVAL_SECONDS",
-                 "REQUEST_TIMEOUT_SECONDS", "CONTACT", "GATEWAY_KNOWN_HOSTS", "LOG_FILE")
+                 "RECHECK_NODES", "SECONDS_PER_POSITION_LIMIT", "BATCH_SIZE", "IDLE_SLEEP_SECONDS", "MIN_PLIES",
+                 "LICHESS_MIN_INTERVAL_SECONDS", "REQUEST_TIMEOUT_SECONDS", "CONTACT", "GATEWAY_KNOWN_HOSTS", "LOG_FILE")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -53,6 +53,8 @@ class Config:
     engine_threads: int = 8
     engine_hash_mb: int = 512
     nodes: int = 200_000
+    recheck_nodes: int = 2_250_000  # fishnet's own NNUE node budget (see HOW_IT_WORKS.md): the deeper look for a
+    # moment whose win% swing lands close to a threshold (analysis.is_borderline). 0 switches the re-check off.
     position_seconds: float = 60.0
     batch_size: int = 20
     idle_sleep: float = 300.0
@@ -96,6 +98,7 @@ def load_config(env):
         engine_threads=_number(env, "ENGINE_THREADS", 8, int, 1),
         engine_hash_mb=_number(env, "ENGINE_HASH_MB", 512, int, 16),
         nodes=_number(env, "NODES_PER_POSITION", 200_000, int, 1000),
+        recheck_nodes=_number(env, "RECHECK_NODES", 2_250_000, int, 0),
         position_seconds=_number(env, "SECONDS_PER_POSITION_LIMIT", 60.0, float, 1.0),
         batch_size=_number(env, "BATCH_SIZE", 20, int, 1),
         idle_sleep=_number(env, "IDLE_SLEEP_SECONDS", 300.0, float, 1.0),
@@ -281,13 +284,15 @@ class Engine:
         self._engine.configure({"Threads": self.threads, "Hash": self.hash_mb})
         self.name = str(self._engine.id.get("name") or "Stockfish")[:100]
 
-    def evaluate(self, board, game_token):
-        """(score, best move in UCI) for a position: the score is ("cp", n) or ("mate", n) from White's point of view."""
+    def evaluate(self, board, game_token, nodes=None):
+        """(score, best move in UCI) for a position: the score is ("cp", n) or ("mate", n) from White's point of view.
+        `nodes` overrides the engine's usual budget for this one call - used by the deeper borderline re-check
+        (recheck_borderline), which needs far more than the fast pass's normal budget."""
         import chess.engine
         if self._engine is None:
             self._open()
         try:
-            info = self._engine.analyse(board, chess.engine.Limit(nodes=self.nodes, time=self.seconds), game=game_token)
+            info = self._engine.analyse(board, chess.engine.Limit(nodes=nodes or self.nodes, time=self.seconds), game=game_token)
         except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
             self.close()
             raise
@@ -347,13 +352,42 @@ def _packed_clocks(data, plies):
     return base64.b64encode(analysis.pack_clocks(clocks)).decode("ascii")
 
 
-def make_result(job, data, run, engine_name, nodes):
-    """The result dict the gateway's `submit` takes, for one analysed game."""
+def recheck_borderline(engine, played, summary, recheck_nodes):
+    """`summary` with every moment whose win% swing is close to a threshold (analysis.is_borderline) redone at
+    `recheck_nodes` instead of the fast pass's usual budget: the position before and after it re-evaluated, and
+    its verdict replaced by what the deeper look finds, or dropped if the deeper look says it wasn't really a
+    mistake after all. `played` is analyse_moves' own list of UCI moves, one per ply, replayed to rebuild
+    whichever positions need a second look (cheap: no engine calls, just pushing moves)."""
+    import chess
+    token = object()
+    fixed = []
+    for m in summary.moments:
+        if not analysis.is_borderline(m.lost):
+            fixed.append(m)
+            continue
+        board = chess.Board()
+        for uci in played[: m.ply - 1]:
+            board.push(chess.Move.from_uci(uci))
+        prev = engine.evaluate(board, token, nodes=recheck_nodes)[0]
+        board.push(chess.Move.from_uci(played[m.ply - 1]))
+        cur = engine.evaluate(board, token, nodes=recheck_nodes)[0]
+        mover_white = m.ply % 2 == 1
+        verdict = analysis.judgement(prev, cur, mover_white)
+        if verdict:
+            fixed.append(analysis.Moment(m.ply, verdict, round(analysis.lost_points(prev, cur, mover_white), 1)))
+    return analysis.with_moments(summary, fixed)
+
+
+def make_result(job, data, run, engine_name, nodes, engine=None, recheck_nodes=None):
+    """The result dict the gateway's `submit` takes, for one analysed game. With `engine` and a positive
+    `recheck_nodes`, moments close to a threshold are given a second, deeper look (recheck_borderline)."""
     scores, bests, played, positions = run
     middle, end = divider.divide(positions)
     if middle is None:
         end = None  # there is no endgame without a middlegame
     summary = analysis.summarise(scores, middle, end, bests, played)
+    if engine is not None and recheck_nodes:
+        summary = recheck_borderline(engine, played, summary, recheck_nodes)
     return {
         "site": job["site"],
         "game_id": job["game_id"],
@@ -440,7 +474,7 @@ def process_batch(jobs, http, engine, config):
         started = time.monotonic()
         try:
             run = analyse_moves(engine.evaluate, data.moves)
-            results.append(make_result(job, data, run, engine.name, config.nodes))
+            results.append(make_result(job, data, run, engine.name, config.nodes, engine, config.recheck_nodes))
             log.info("analysed %s %s (%d plies) in %.1f s", job["site"], job["game_id"], len(data.moves), time.monotonic() - started)
         except Exception as why:  # one bad game or a dead engine must not lose the rest of the batch
             log.exception("could not analyse %s %s", job["site"], job["game_id"])

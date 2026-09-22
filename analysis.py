@@ -12,20 +12,32 @@ for White, and "mate" n is a forced mate in n moves (positive: White mates, nega
 starting position counts as 15 centipawns, as it does on Lichess.
 """
 
+import dataclasses
 import json
 import math
 import statistics
 import struct
 from dataclasses import dataclass
 
-METHOD_VERSION = 3  # raised whenever a change to the method would change the figures or what is kept, so older rows can be re-run
+METHOD_VERSION = 4  # raised whenever a change to the method would change the figures or what is kept, so older rows can be re-run
 # (2: each game also keeps the plies of the moves called inaccuracies, mistakes and blunders)
+# (3: clocks are kept too)
+# (4: a moment whose win% swing sits within RECHECK_MARGIN of a threshold is re-evaluated deeper by the worker - see
+#  is_borderline and worker.recheck_borderline)
 INITIAL_CP = 15
 CAP = 1000  # accuracy treats every evaluation as at most this many centipawns, and a forced mate as exactly this
 _K = -0.00368208  # Lichess's fit of centipawns to winning chances
 
 # Winning chances (a scale of -1 to +1, so 0.1 is 5 percentage points of win probability) lost by a move.
 INACCURACY, MISTAKE, BLUNDER = 0.1, 0.2, 0.3
+
+# A move's win% swing this close to one of the three lines above (in percentage points, not the -1..1 scale) is
+# worth a second, deeper look: a fast, shallow search is noisy enough that a call this close to a threshold can
+# easily land on the wrong side of it. Found empirically: two real disputed moves sat 0 and 0.4 points from a
+# line and both moved by several points once looked at properly (see HOW_IT_WORKS.md, "the deeper re-check").
+# Kept well under half the 5-point gap between thresholds so the three re-check bands don't run together into
+# one another and swallow most of the game.
+RECHECK_MARGIN = 2
 
 _ACCURACY_A, _ACCURACY_B, _ACCURACY_C = 103.1668100711649, -0.04354415386753951, -3.166924740191411
 _MAX_WINDOW, _MIN_WINDOW = 8, 2
@@ -146,13 +158,33 @@ class Summary:
     moments: tuple = ()  # the Moments of both sides, in the order played
 
 
-def _lost_points(prev, cur, white):
-    """Win-probability points a move cost the player who made it (0 if it cost nothing)."""
+def lost_points(prev, cur, white):
+    """Win-probability points (percentage points, 0 to 100) a move cost the player who made it (0 if it cost
+    nothing). Public so worker.py can use it too, for the deeper re-check's own verdicts."""
     if prev[0] == "cp" and cur[0] == "cp":
         change = winning_chances(cur[1]) - winning_chances(prev[1])
         return max(0.0, 50 * (-change if white else change))
     before, after = win_percent(as_cp(prev)), win_percent(as_cp(cur))  # a mate is involved: the capped scale will do
     return max(0.0, (before - after) if white else (after - before))
+
+
+def is_borderline(lost):
+    """True if a moment's win% swing (percentage points) sits within RECHECK_MARGIN of the inaccuracy/mistake/
+    blunder line at 5, 10 or 15 - close enough that a deeper look could change the verdict."""
+    return any(abs(lost - threshold) <= RECHECK_MARGIN for threshold in (5, 10, 15))
+
+
+def with_moments(summary, moments):
+    """`summary` with its moments replaced by `moments` (newest verdicts, from a deeper re-check) and the
+    inaccuracy/mistake/blunder counts on both sides recomputed to match. Accuracy and ACPL are untouched: they
+    come from the fast pass's own eval curve, not from the moments, so a corrected verdict doesn't affect them."""
+    counts = {"white": {"inaccuracy": 0, "mistake": 0, "blunder": 0}, "black": {"inaccuracy": 0, "mistake": 0, "blunder": 0}}
+    for m in moments:
+        counts["white" if m.ply % 2 else "black"][m.verdict] += 1
+    sides = {colour: dataclasses.replace(getattr(summary, colour), inaccuracies=counts[colour]["inaccuracy"],
+                                          mistakes=counts[colour]["mistake"], blunders=counts[colour]["blunder"])
+             for colour in ("white", "black")}
+    return dataclasses.replace(summary, white=sides["white"], black=sides["black"], moments=tuple(moments))
 
 
 def _phase_accuracy(colour, cps, indexes):
@@ -186,7 +218,7 @@ def summarise(scores, middle, end, bests=None, played=None):
             verdict = None
         if verdict:
             counts[colour][verdict] += 1
-            moments.append(Moment(i + 1, verdict, round(_lost_points(prev, scores[i], white), 1)))
+            moments.append(Moment(i + 1, verdict, round(lost_points(prev, scores[i], white), 1)))
         losses[colour].append(max(0, (prev_cp - cps[i]) if white else (cps[i] - prev_cp)))
 
     overall = game_accuracy(True, cps)

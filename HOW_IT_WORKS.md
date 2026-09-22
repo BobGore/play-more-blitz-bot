@@ -238,7 +238,8 @@ Built so an admin checking on one game's state doesn't have to open `sqlite3` an
 ## 7. The method
 
 `analysis.py` follows the method Lichess publishes for its computer analysis, so numbers read on the same scale.
-`METHOD_VERSION` (now 3: version 3 added the clocks) is raised whenever a change alters the figures or what is kept; older rows are then re-analysed.
+`METHOD_VERSION` (now 4) is raised whenever a change alters the figures or what is kept; older rows are then re-analysed.
+(2: kept the plies of inaccuracies/mistakes/blunders. 3: added the clocks. 4: the deeper re-check below.)
 
 - Scores are `("cp", n)` or `("mate", n)` from White's point of view. The start position counts as 15 centipawns.
 - **Win %** = 50 + 50·(2 / (1 + e^(−0.00368208·cp)) − 1), with the evaluation capped at ±1000 centipawns (a mate is the cap).
@@ -253,6 +254,36 @@ Built so an admin checking on one game's state doesn't have to open `sqlite3` an
   did not change accuracy much; the counts of mistakes differ from Lichess's own (theirs come from noisier evaluations),
   so present them as "the bot's own estimate", accuracy being the trustworthy headline.
 - A clock-free time-trouble signal: "lost on time while equal or better" (used in the review's "Interesting" section).
+
+**The deeper re-check of a borderline moment.** Prompted by a member's complaint that a move was flagged as a blunder
+when Lichess's own analysis called it a mistake (confirmed by fetching that game's own Lichess-annotated PGN and
+checking it by hand - see the git history around the `!gamestate` moments work for the full investigation). What was
+actually found:
+
+- 200,000 nodes is well short of what Lichess's own analysis uses: their fishnet workers run NNUE Stockfish at a fixed
+  **2,250,000-node** budget per position (confirmed on their own forum and `fishnet`'s protocol doc, and directly by a
+  lichess-org contributor) - about 11x our own budget.
+- Re-evaluating the disputed move at higher node counts, with the *same* Stockfish version and thread/hash settings the
+  worker uses (an earlier attempt with a different local Stockfish version gave misleading results - the version
+  matters as much as the node count), did move the call in the right direction, but even matching fishnet's own node
+  budget exactly didn't land on fishnet's exact historical number for that game. Chess engine search has real run-to-run
+  variance on a sharp position; there is no single deterministic "true" answer to converge on, only closer estimates.
+  So the goal here is a more internally consistent call, not an exact match with Lichess.
+- `analysis.RECHECK_MARGIN` (2 percentage points) and `analysis.is_borderline(lost)` decide which moments are close
+  enough to the 5/10/15pp lines to be worth a second look - kept well under half the 5-point gap between thresholds so
+  the three margins don't run together and end up rechecking most of the game.
+- `worker.recheck_borderline` re-evaluates the position before and after each borderline moment at `RECHECK_NODES`
+  (default 2,250,000, fishnet's own budget; 0 switches it off) instead of the fast pass's usual budget, replaying
+  `played` (the UCI moves `analyse_moves` already returns) to rebuild whichever positions need it - no extra engine
+  calls for the rest of the game. A verdict that disappears at the deeper look is dropped, not just downgraded.
+- `analysis.with_moments` plugs the corrected moments back into the `Summary`, recomputing the inaccuracy/mistake/
+  blunder counts on both sides; accuracy and ACPL come from the fast pass's own eval curve, not from the moments, so
+  they're untouched by a corrected verdict.
+- Cost: only games with a borderline moment pay for it, and only for that one move (two extra deep evaluations, not a
+  deeper pass over the whole game). Measured once at 8-25M nodes on ordinary hardware: roughly 15-50 seconds for one
+  moment's two positions - noticeably more than the ~3 seconds a whole game normally takes, but rare, not routine.
+- A stat comparing our own figures against Lichess's stored analysis (for games Lichess has analysed; Chess.com has no
+  equivalent to compare against) is a natural follow-up, not yet built.
 
 ## 8. The worker
 
