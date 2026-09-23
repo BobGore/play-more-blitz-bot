@@ -53,7 +53,7 @@ class Config:
     engine_threads: int = 8
     engine_hash_mb: int = 512
     nodes: int = 200_000
-    recheck_nodes: int = 2_250_000  # fishnet's own NNUE node budget (see HOW_IT_WORKS.md): the deeper look for a
+    recheck_nodes: int = 3_000_000  # fishnet's own classical-game budget (see HOW_IT_WORKS.md): the deeper look for a
     # moment whose win% swing lands close to a threshold (analysis.is_borderline). 0 switches the re-check off.
     position_seconds: float = 60.0
     batch_size: int = 20
@@ -98,7 +98,7 @@ def load_config(env):
         engine_threads=_number(env, "ENGINE_THREADS", 8, int, 1),
         engine_hash_mb=_number(env, "ENGINE_HASH_MB", 512, int, 16),
         nodes=_number(env, "NODES_PER_POSITION", 200_000, int, 1000),
-        recheck_nodes=_number(env, "RECHECK_NODES", 2_250_000, int, 0),
+        recheck_nodes=_number(env, "RECHECK_NODES", 3_000_000, int, 0),
         position_seconds=_number(env, "SECONDS_PER_POSITION_LIMIT", 60.0, float, 1.0),
         batch_size=_number(env, "BATCH_SIZE", 20, int, 1),
         idle_sleep=_number(env, "IDLE_SLEEP_SECONDS", 300.0, float, 1.0),

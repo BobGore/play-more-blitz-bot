@@ -51,7 +51,7 @@ The bot never trusts the worker with anything beyond figures, and never keeps a 
 | What | Role | How to look at it |
 | --- | --- | --- |
 | **The bot server** (any small always-on Linux box; currently an old mini PC) | Runs the bot (systemd service `playmoreblitz`), holds the database and the queue, runs the gateway the worker calls, runs the nightly backup timer. | `ssh` to it; log: `journalctl -u playmoreblitz -f`; code in `~/playmoreblitz`; its own venv `venv/`. |
-| **The analysis worker** (any machine with a few CPU cores to spare; currently a reasonably specced HP EliteDesk 800 G6, 16 GB RAM, Windows 11) | Runs the analysis worker as a Windows scheduled task (`PlayMoreBlitzWorker`, starts at boot, runs as SYSTEM, restarts on failure, below-normal priority). Has Stockfish; on the current machine, timing games through the fixed 200,000-nodes/position budget works out to roughly 4-5 million nodes/second across its 8 threads on average — the true rate varies with how sharp a position is, so treat it as a ballpark, not a benchmark. | `ssh` to it; log: `C:\ProgramData\pmb-worker\worker.log`; files in `C:\Users\<user>\pmb-worker\`; its Python venv `C:\Users\<user>\pmb-analysis\venv` (keep it: the service uses it). |
+| **The analysis worker** (any machine with a few CPU cores to spare; currently a reasonably specced HP EliteDesk 800 G6, 16 GB RAM, Windows 11) | Runs the analysis worker as a Windows scheduled task (`PlayMoreBlitzWorker`, starts at boot, runs as SYSTEM, restarts on failure, below-normal priority). Has Stockfish; measured throughput on this machine is roughly 4-5 million nodes/second across its 8 threads on average (from early timings at the original 200,000-nodes/position budget, since raised - see section 7; the true rate varies with how sharp a position is, so treat it as a ballpark, not a benchmark). | `ssh` to it; log: `C:\ProgramData\pmb-worker\worker.log`; files in `C:\Users\<user>\pmb-worker\`; its Python venv `C:\Users\<user>\pmb-analysis\venv` (keep it: the service uses it). |
 | **Developer PC** | Editing, tests, git. | `C:\Users\<user>\playmoreblitz-bot` (has the private test fixtures; never commit them). |
 | **GitHub** | The copy both machines pull from (`main`). | `git push` from the PC; `git pull` on the bot server. |
 | **Discord** | The application/bot, the server, channels, slash commands. | Developer Portal for the token and invite; Server Settings for roles. |
@@ -180,7 +180,7 @@ The path of one game, and every place it can stop:
  4 worker asks (SSH → worker_gateway "claim N")                             → status "claimed" (attempts+1)
  5 worker fetches the game from the site itself (moves live in its memory only; the clocks come with it and are kept)
  6 worker: standard start? long enough? → else "release" with a skip reason → status "skipped"
- 7 Stockfish evaluates every position (200,000 nodes each) → analysis.summarise → figures + moments
+ 7 Stockfish evaluates every position (200,000 nodes each; a borderline moment gets a second look, see 7) → analysis.summarise → figures + moments
  8 worker "submit" (evals base64, in chunks ≤ 60,000 characters)             → validated (analysis_queue._problem)
  9 stored: figures, evals, moments, method_version, analysed_at              → status "done"
 10 shown by !lastgame / !mystats / !obit / !export
@@ -238,8 +238,9 @@ Built so an admin checking on one game's state doesn't have to open `sqlite3` an
 ## 7. The method
 
 `analysis.py` follows the method Lichess publishes for its computer analysis, so numbers read on the same scale.
-`METHOD_VERSION` (now 4) is raised whenever a change alters the figures or what is kept; older rows are then re-analysed.
-(2: kept the plies of inaccuracies/mistakes/blunders. 3: added the clocks. 4: the deeper re-check below.)
+`METHOD_VERSION` (now 5) is raised whenever a change alters the figures or what is kept; older rows are then re-analysed.
+(2: kept the plies of inaccuracies/mistakes/blunders. 3: added the clocks. 4: the deeper re-check below. 5: the
+recheck budget for a borderline moment corrected from 2,250,000 to 3,000,000 - see "Engine settings" below.)
 
 - Scores are `("cp", n)` or `("mate", n)` from White's point of view. The start position counts as 15 centipawns.
 - **Win %** = 50 + 50·(2 / (1 + e^(−0.00368208·cp)) − 1), with the evaluation capped at ±1000 centipawns (a mate is the cap).
@@ -250,9 +251,15 @@ Built so an admin checking on one game's state doesn't have to open `sqlite3` an
   judged. `Moment.lost` is the win-probability points a move cost the player who made it.
 - **Phases** (opening / middlegame / endgame) come from `divider.py`, a port of Lichess's divider; `middle_ply` and
   `end_ply` are where they start (NULL if never reached).
-- **Engine settings** (worker): Stockfish at 200,000 nodes per position, 8 threads, about 3 seconds a game. More time
-  did not change accuracy much; the counts of mistakes differ from Lichess's own (theirs come from noisier evaluations),
-  so present them as "the bot's own estimate", accuracy being the trustworthy headline.
+- **Engine settings** (worker): Stockfish at 200,000 nodes per position for the fast pass, 8 threads, about 3 seconds
+  a game. A borderline moment (`analysis.is_borderline`) gets a second, deeper look at `RECHECK_NODES` (3,000,000) -
+  fishnet's own budget for a member's own classical game (see "The deeper re-check" below for where that number
+  comes from). Only games with a borderline moment pay the extra cost, and a game already rechecked at an older,
+  smaller budget is picked up for reanalysis once nothing else is waiting, via the same rerun mechanism as any other
+  method change - so the correction reaches the existing backlog automatically over idle time, newest games first,
+  never ahead of new games arriving. The counts of mistakes can still differ from Lichess's own (theirs come from a
+  different analysis run, possibly requested for a different reason and so at a different budget - see below), so
+  they're presented as "the bot's own estimate", accuracy being the trustworthy headline.
 - A clock-free time-trouble signal: "lost on time while equal or better" (used in the review's "Interesting" section).
 
 **The deeper re-check of a borderline moment.** Prompted by a member's complaint that a move was flagged as a blunder
@@ -260,9 +267,14 @@ when Lichess's own analysis called it a mistake (confirmed by fetching that game
 checking it by hand - see the git history around the `!gamestate` moments work for the full investigation). What was
 actually found:
 
-- 200,000 nodes is well short of what Lichess's own analysis uses: their fishnet workers run NNUE Stockfish at a fixed
-  **2,250,000-node** budget per position (confirmed on their own forum and `fishnet`'s protocol doc, and directly by a
-  lichess-org contributor) - about 11x our own budget.
+- 200,000 nodes (the fast pass's budget) is well short of what Lichess's own analysis uses for a member's own game.
+  Confirmed directly in `lila`'s own source (`modules/fishnet/src/main/Work.scala`): the node budget is set
+  server-side by *why* the analysis was requested - `manualRequest` (a member's own game or study) gets 1,000,000,
+  `officialBroadcast` 5,000,000, and two lower automated tiers get less; classical time controls get a further ×3 on
+  top of whichever of those applies (`modules/fishnet/src/main/JsonApi.scala`). So a member's own classical game gets
+  3,000,000 - the number `RECHECK_NODES` was corrected to match. (An earlier figure of 2,250,000, sourced secondhand
+  from a forum post rather than the real source, turned out not to match what fishnet actually uses for this case;
+  see METHOD_VERSION 5.)
 - Re-evaluating the disputed move at higher node counts, with the *same* Stockfish version and thread/hash settings the
   worker uses (an earlier attempt with a different local Stockfish version gave misleading results - the version
   matters as much as the node count), did move the call in the right direction, but even matching fishnet's own node
@@ -273,7 +285,7 @@ actually found:
   enough to the 5/10/15pp lines to be worth a second look - kept well under half the 5-point gap between thresholds so
   the three margins don't run together and end up rechecking most of the game.
 - `worker.recheck_borderline` re-evaluates the position before and after each borderline moment at `RECHECK_NODES`
-  (default 2,250,000, fishnet's own budget; 0 switches it off) instead of the fast pass's usual budget, replaying
+  (default 3,000,000, fishnet's own classical-game budget; 0 switches it off) instead of the fast pass's usual budget, replaying
   `played` (the UCI moves `analyse_moves` already returns) to rebuild whichever positions need it - no extra engine
   calls for the rest of the game. A verdict that disappears at the deeper look is dropped, not just downgraded.
 - `analysis.with_moments` plugs the corrected moments back into the `Summary`, recomputing the inaccuracy/mistake/

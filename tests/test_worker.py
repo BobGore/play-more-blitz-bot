@@ -712,7 +712,7 @@ def test_the_defaults_and_the_required_settings():
     c = w.load_config(GOOD)
     assert (c.gateway_target, c.gateway_key, c.stockfish_path) == ("user@host", "/k", "/sf")
     assert (c.engine_threads, c.engine_hash_mb, c.nodes, c.batch_size, c.idle_sleep, c.min_plies, c.lichess_interval) == (8, 512, 200_000, 20, 300.0, 6, 2.0)
-    assert c.recheck_nodes == 2_250_000
+    assert c.recheck_nodes == 3_000_000
     for name in GOOD:
         with pytest.raises(w.ConfigError) as why:
             w.load_config({k: v for k, v in GOOD.items() if k != name})

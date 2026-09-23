@@ -326,8 +326,8 @@ def test_a_long_game_uses_the_widest_window():
 
 # --- the clocks ----------------------------------------------------------------------------------------------------------------------
 
-def test_the_method_is_version_four_because_borderline_moments_are_now_rechecked_deeper():
-    assert analysis.METHOD_VERSION == 4
+def test_the_method_is_version_five_because_the_recheck_budget_was_corrected():
+    assert analysis.METHOD_VERSION == 5
 
 
 def test_clocks_round_trip_in_tenths_of_a_second_two_bytes_a_ply():

@@ -19,7 +19,7 @@ import statistics
 import struct
 from dataclasses import dataclass
 
-METHOD_VERSION = 4  # raised whenever a change to the method would change the figures or what is kept, so older rows can be re-run
+METHOD_VERSION = 5  # raised whenever a change to the method would change the figures or what is kept, so older rows can be re-run
 # (2: each game also keeps the plies of the moves called inaccuracies, mistakes and blunders)
 # (3: clocks are kept too)
 # (4: a moment whose win% swing sits within RECHECK_MARGIN of a threshold is re-evaluated deeper by the worker - see
