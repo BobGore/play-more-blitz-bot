@@ -66,7 +66,13 @@ and you have more than one account, the bot lists them and asks which.
   player that failed and why instead, and retries every 30 minutes. At 9am UK time it posts the final table.
   Each player's next month opens from their closing rating.
 - **Sign-up call.** Seven days before each month starts, at 9am UK time, the bot invites sign-ups for the
-  next month's challenge.
+  next month's challenge (`/100gobnext` or `!100gobnext`).
+- **Results updates.** At 9am UK time on the 10th and 20th, and again straight after the sign-up call, the bot posts
+  the month's table so far, with a line saying exactly how many days are gone or left. Each goes out once; if the bot
+  was down, it posts the latest one due when it's back, counted from that day, never a string of stale ones.
+- **Switching posts off.** `ANNOUNCEMENTS=off` stops the sign-up call and the month-end final table;
+  `RESULTS_UPDATES=off` stops the results updates. The month is still closed either way, and a notice that a month
+  couldn't be closed is always posted.
 - **Site limits are respected.** Chess.com and Lichess are called strictly one request at a time, with a
   timeout, and Lichess's export is spaced out. Anything unexpected (an unknown result code, a game that isn't
   standard rated blitz) is an error, never a guess.
@@ -116,6 +122,9 @@ setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at s
 | `COOLDOWN_SECONDS` | Per-user cooldown on the commands that call the sites. Admins are exempt. | 600 |
 | `POST_HOUR_UK` | The hour (0-23, UK time) at which scheduled posts go out. | 9 |
 | `CALL_DAYS_BEFORE` | Days before a month starts that the sign-up call goes out. | 7 |
+| `ANNOUNCEMENTS` | Whether the bot posts the 100GOB sign-up call and the month-end final table (on/off). | on |
+| `RESULTS_UPDATES` | Whether the bot posts the month's table so far on the results-update days and after the sign-up call (on/off). | on |
+| `RESULTS_UPDATE_DAYS` | The days of the month (1-28, comma-separated) for the results updates, besides the sign-up call's day. | 10,20 |
 | `MIN_OPENING_GAMES` | Games an opening needs to get its own row rather than "All others". | 2 |
 | `MIN_BEST_WORST_GAMES` | Games an opening needs before it can be called best or worst. | 3 |
 | `SIMILAR_RATING_BAND` | Rating points either side of yours that count as a similar opponent. | 50 |

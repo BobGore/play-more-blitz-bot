@@ -141,7 +141,10 @@ async def refresh_loop():
 
 
 async def post_signup_call_if_due():
-    """Post the 100GOB sign-up call if it is due and hasn't been posted for that month. Returns whether it posted."""
+    """Post the 100GOB sign-up call if it is due and hasn't been posted for that month. Returns whether it posted.
+    Nothing when ANNOUNCEMENTS is off."""
+    if not settings.ANNOUNCEMENTS:
+        return False
     now = datetime.now(timezone.utc)
     month = announce.signup_call_due(now)
     if month is None:
@@ -182,7 +185,8 @@ async def post_month_end_if_due():
     posted = False
 
     cutoff = (now - timedelta(days=3)).isoformat()  # only recent closes: never re-post old history
-    for month in await asyncio.to_thread(store.closed_months_since, cutoff):
+    finished = await asyncio.to_thread(store.closed_months_since, cutoff) if settings.ANNOUNCEMENTS else []
+    for month in finished:  # ANNOUNCEMENTS off: no final table; the notice below is posted regardless
         if not announce.month_end_post_due(month, now):
             continue
         if not await asyncio.to_thread(store.claim_announcement, "month_end", month, now.isoformat()):
@@ -211,10 +215,47 @@ async def post_month_end_if_due():
     return posted
 
 
+async def post_results_update_if_due():
+    """Post the month's table so far on a results-update day (RESULTS_UPDATE_DAYS, and the day of the sign-up call),
+    with a line saying how far through the month it is. Once per update day; nothing when RESULTS_UPDATES is off.
+    Returns whether it posted."""
+    if not settings.RESULTS_UPDATES:
+        return False
+    now = datetime.now(timezone.utc)
+    due = announce.results_update_due(now)
+    if due is None:
+        return False
+    month, day = due
+    key = f"{month}/{day:02d}"
+    if not await asyncio.to_thread(store.claim_announcement, "results_update", key, now.isoformat()):
+        return False  # already posted, perhaps before a restart
+    try:
+        rows = await asyncio.to_thread(store.results, month)
+        if not rows:
+            log.info("no results update for %s: nobody is registered", key)
+            return False
+        signed_up = await asyncio.to_thread(store.signups, sources.next_month(month))
+        messages = render.render_results(rows, month, now, GOB_TARGET, signed_up)
+        intro = announce.results_update_text(month, now)
+        if len(intro) + 1 + len(messages[0]) <= 2000:
+            messages[0] = f"{intro}\n{messages[0]}"
+        else:
+            messages.insert(0, intro)
+        channel = await _post_channel()
+        for message in messages:
+            await channel.send(message)
+    except Exception:
+        log.exception("couldn't post the results update for %s", key)
+        await asyncio.to_thread(store.release_announcement, "results_update", key)
+        return False
+    log.info("posted the results update for %s", key)
+    return True
+
+
 @tasks.loop(time=announce.POST_TIME)
 async def daily_posts():
-    """Every day at 9am UK time."""
-    for post in (post_signup_call_if_due, post_month_end_if_due):
+    """Every day at 9am UK time. The sign-up call goes before the results update, which on the call's day follows it."""
+    for post in (post_signup_call_if_due, post_month_end_if_due, post_results_update_if_due):
         try:
             await post()
         except Exception:
@@ -346,6 +387,7 @@ async def on_ready():
         daily_posts.start()
         try:
             await post_signup_call_if_due()  # catch up if the bot was down when a post was due
+            await post_results_update_if_due()
         except Exception:
             log.exception("catch-up posts crashed")
 

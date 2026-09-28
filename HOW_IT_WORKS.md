@@ -73,7 +73,7 @@ loops (each starts only once, even if Discord reconnects):
 | `obit_loop` | every 60 s | Sends the reviews people asked for once their game is analysed (see 9). |
 | `health_loop` | every 5 min | Checks the analysis worker, and the backups; sends alerts (see 11). |
 | `heartbeat_loop` | every 60 s, only if `HEARTBEAT_URL` is set | Pings the outside monitor to say the bot is alive. |
-| `daily_posts` | 9am UK | The 100GOB sign-up call and the month-end table, if due. |
+| `daily_posts` | 9am UK | The 100GOB sign-up call and the month-end table, if due (`ANNOUNCEMENTS`), then the results update on `RESULTS_UPDATE_DAYS` (10th, 20th) and the call's day (`RESULTS_UPDATES`). Each is claimed in `announcements` so it goes out once; a missed results update is posted late only as the latest one due. |
 
 It also registers the Delete button for DMs (so old buttons keep working after a restart) and registers the slash
 commands (`/obit`, `/export`) in each server that has an allowed channel. If Discord refuses that with "Missing Access",

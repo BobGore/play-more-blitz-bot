@@ -57,6 +57,20 @@ def flag(name, default, env=os.environ):
     _fail(name, raw, "yes or no (1, true, yes, on, 0, false, no or off)")
 
 
+def day_numbers(name, default, env=os.environ):
+    """Days of the month, e.g. "10,20", as a sorted tuple. 1 to 28, so every day exists in every month."""
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return tuple(default)
+    try:
+        days = {int(part) for part in raw.split(",") if part.strip()}
+    except ValueError:
+        _fail(name, raw, "days of the month from 1 to 28, separated by commas")
+    if not days or any(d < 1 or d > 28 for d in days):
+        _fail(name, raw, "days of the month from 1 to 28, separated by commas")
+    return tuple(sorted(days))
+
+
 def discord_ids(name, default, env=os.environ):
     raw = env.get(name)
     if raw is None or not raw.strip():
@@ -111,6 +125,14 @@ if POST_HOUR_UK > 23:
     _fail("POST_HOUR_UK", os.environ.get("POST_HOUR_UK"), "an hour from 0 to 23")
 CALL_DAYS_BEFORE = whole_number("CALL_DAYS_BEFORE", 7)  # the sign-up call goes out this many days before the month
 
+# Switches for the bot's own posts in the channel, so a kind can be turned off without a code change. ANNOUNCEMENTS is
+# the 100GOB sign-up call and the month-end final table; RESULTS_UPDATES is the table posted during the month, on
+# RESULTS_UPDATE_DAYS and again on the day of the sign-up call. The month is still closed either way, and the notice
+# that a month couldn't be closed is always posted.
+ANNOUNCEMENTS = flag("ANNOUNCEMENTS", True)
+RESULTS_UPDATES = flag("RESULTS_UPDATES", True)
+RESULTS_UPDATE_DAYS = day_numbers("RESULTS_UPDATE_DAYS", (10, 20))  # days of the month, 1 to 28
+
 # --- Game analysis (the queue the EliteDesk worker draws from) ------------------------------------------
 
 # Whether the bot puts members' games in the analysis queue. Off until the analysis worker is set up: with it off
@@ -160,6 +182,7 @@ DB_LOCK_TIMEOUT = seconds("DB_LOCK_TIMEOUT", 5.0)  # how long to wait for anothe
 NAMES = (
     "ALLOWED_CHANNEL_IDS", "POST_CHANNEL_ID", "ADMIN_USER_IDS", "ALERT_USER_IDS", "HEARTBEAT_URL",
     "GOB_TARGET", "REFRESH_INTERVAL_MINUTES", "COOLDOWN_SECONDS", "POST_HOUR_UK", "CALL_DAYS_BEFORE",
+    "ANNOUNCEMENTS", "RESULTS_UPDATES", "RESULTS_UPDATE_DAYS",
     "MIN_OPENING_GAMES", "MIN_BEST_WORST_GAMES", "SIMILAR_RATING_BAND", "STATS_CACHE_PLAYERS",
     "REQUEST_TIMEOUT_SECONDS", "MONTH_TIMEOUT_SECONDS", "MONTH_STALL_SECONDS", "LICHESS_EXPORT_MIN_INTERVAL",
     "PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT", "BACKUP_DIR", "BACKUP_KEEP_DAYS",

@@ -1,4 +1,4 @@
-"""When to post the 100GOB sign-up call, and what it says. Pure functions: no Discord, no database."""
+"""When to post the 100GOB sign-up call and the results updates, and what they say. Pure functions: no Discord, no database."""
 
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -37,6 +37,41 @@ def month_end_post_due(month, now):
     return now >= datetime.combine(following, POST_TIME.replace(tzinfo=None), tzinfo=UK)
 
 
+def results_update_due(now, days=None):
+    """The (month "YYYY-MM", day) of the results update due at `now`, or None.
+
+    Updates go out at 9am UK on each of `days` (RESULTS_UPDATE_DAYS) and on the day of the sign-up call. Only the latest
+    one that has come due is ever returned, so a bot that was down posts one late update, not a string of stale ones;
+    posting it only once is the caller's job.
+    """
+    days = settings.RESULTS_UPDATE_DAYS if days is None else days
+    now = now.astimezone(UK)
+    today = now.date()
+    call = first_of_next_month(today) - timedelta(days=CALL_DAYS_BEFORE)
+    call_day = {call.day} if (call.year, call.month) == (today.year, today.month) else set()
+    due = [d for d in set(days) | call_day
+           if d <= today.day and now >= datetime.combine(today.replace(day=d), POST_TIME.replace(tzinfo=None), tzinfo=UK)]
+    if not due:
+        return None
+    return f"{today.year:04d}-{today.month:02d}", max(due)
+
+
+def _days(n):
+    return f"{n} day{'' if n == 1 else 's'}"
+
+
+def results_update_text(month, now):
+    """The line above a results update: exact days gone, or days left, counted from the UK date it is posted."""
+    today = now.astimezone(UK).date()
+    last = (first_of_next_month(today) - timedelta(days=1)).day
+    gone, left = today.day, last - today.day
+    title = render.month_title(month)
+    if gone <= left:
+        return f"**{title}: {_days(gone)} in** - how are we all doing? {_days(left)} to go. Here's where everyone is:"
+    return (f"**{title}: {_days(left)} to go** - still time to get some more games in before the month ends. "
+            "Here's where everyone is:")
+
+
 def uk_date(now):
     """The UK calendar date at `now`, as YYYY-MM-DD."""
     return now.astimezone(UK).date().isoformat()
@@ -67,7 +102,7 @@ def close_failure_text(month, failures):
 def signup_call_text(month, target):
     return (
         f"**100GOB for {render.month_title(month)}: sign-ups are open**\n"
-        f"Play {target} rated blitz games in the month. Join with `!100gobnext` "
+        f"Play {target} rated blitz games in the month. Join with `/100gobnext` or `!100gobnext` "
         "(add your username if you have more than one account). "
         "Not on the list yet? Use `!add <username> <site>` first (your own account, one per site)."
     )
