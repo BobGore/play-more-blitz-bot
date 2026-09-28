@@ -1190,7 +1190,8 @@ def test_the_channel_check_lets_a_direct_message_through_for_obit_only():
         return await botmod._in_allowed_channel(ctx)
     assert asyncio.run(allowed(None, DM_CHANNEL, "obit")) is True
     assert asyncio.run(allowed(None, DM_CHANNEL, "results")) is False and asyncio.run(allowed(None, DM_CHANNEL, "add")) is False
-    assert asyncio.run(allowed(None, DM_CHANNEL, "mystatsfull")) is False and asyncio.run(allowed(None, DM_CHANNEL, None)) is False
+    assert asyncio.run(allowed(None, DM_CHANNEL, "helpblitzbot")) is False and asyncio.run(allowed(None, DM_CHANNEL, None)) is False
+    assert asyncio.run(allowed(None, DM_CHANNEL, "mystatsfull")) is True                                   # also by DM now
     assert asyncio.run(allowed(SimpleNamespace(id=1), CHANNEL, "results")) is True                       # a server channel: as before
     assert asyncio.run(allowed(SimpleNamespace(id=1), CHANNEL + 5, "obit")) is False
 
@@ -1311,8 +1312,10 @@ def test_commands_in_the_allowed_channel_pass_the_checks_and_other_channels_do_n
 
 def test_a_direct_message_passes_the_checks_for_obit_only():
     assert passes_the_global_checks(None, DM_CHANNEL, "obit") is True
-    for command in ("results", "add", "mystats", "mystatsfull", "helpblitzbot", "remove", None):
+    for command in ("results", "add", "helpblitzbot", "remove", None):
         assert passes_the_global_checks(None, DM_CHANNEL, command) is False
+    for command in ("mystats", "mystatsfull"):                                                             # also by DM now
+        assert passes_the_global_checks(None, DM_CHANNEL, command) is True
 
 
 # --- the turning point, and a chance given back -------------------------------------------------------------------------------------------------

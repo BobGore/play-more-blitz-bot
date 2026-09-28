@@ -392,7 +392,7 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory", "lastgame")  # the private commands members can send the bot in a direct message
+DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory", "lastgame", "mystats", "mystatsfull")  # the commands members can send the bot in a direct message (mystats and mystatsfull also work in the channel)
 ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate", "obitfor")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
@@ -456,15 +456,15 @@ async def _reject(ctx, reason, *, refund_cooldown=False):
 async def help_blitz_bot(ctx):
     await ctx.send(
         "**PlayMoreBlitz bot** - counts each member's rated blitz games this month.\n"
-        f"`{USAGE['add']}` - register your own account, one per site (admins can add others). "
+        f"`{USAGE['add']}` - register your own account, one per site. "
         "It counts this month's games so far; earlier months aren't counted\n"
-        "`!remove <username> [site]` - takes a player off the list (whoever added them, or an admin)\n"
+        "`!remove <username> [site]` - takes a player off the list (whoever added them)\n"
         "`!results [month]` - this month so far for everyone on the list (refreshed every "
         f"{REFRESH_INTERVAL_MINUTES} minutes), or a past month's final table: `!results august`, `!results last`\n"
         f"`!100gob [username]` - join this month's challenge: {GOB_TARGET} games of blitz. Or `/100gob`\n"
         "`!100gobnext [username]` - sign up for next month's challenge. Or `/100gobnext`\n"
-        "`!mystats [username] [month]` - one player's results and openings this month, or another month (yours if no name)\n"
-        "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
+        "`!mystats [username] [month]` - one player's results and openings this month, or another month (yours if no name). Also by DM\n"
+        "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time. Also by DM\n"
         "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB. Direct message only\n"
         "`!myhistory [site]` - your own months from what's been analysed - can include a month `!backfill` added that "
         "`!history` can't see. Direct message only\n"
@@ -740,6 +740,11 @@ async def _player_stats(ctx, username, site, command, full, month_text=None):
     ("!mystats alice last") or of the name ("!mystats last", when no registered player
     has that word as a name).
     """
+    if _in_dm(ctx):  # in a DM, only for someone on the server, as with !history
+        status = await _member_status(ctx.author.id)
+        if status is not True:
+            await _reject(ctx, _not_a_member_text(status), refund_cooldown=True)
+            return
     current = sources.current_month()
     if month_text is None and site is not None and site.lower() not in sources.SITES and monthargs.parse_month(site, current):
         month_text, site = site, None

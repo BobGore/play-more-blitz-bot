@@ -972,6 +972,54 @@ def test_mystats_with_no_account_or_an_unknown_name_says_so(played):
     assert played["calls"] == []
 
 
+def dm_ctx(author_id):
+    """A direct message to the bot: no guild."""
+    ctx = make_ctx(author_id)
+    ctx.guild = None
+    return ctx
+
+
+@pytest.fixture
+def membership(monkeypatch):
+    """What _member_status says: state["status"] is True (on the server), False (not) or None (can't tell)."""
+    state = {"status": True, "asked": []}
+
+    async def fake(user_id):
+        state["asked"].append(user_id)
+        return state["status"]
+    monkeypatch.setattr(botmod, "_member_status", fake)
+    return state
+
+
+def test_mystats_in_a_dm_from_a_member_gives_the_same_output_as_in_the_channel(played, membership):
+    registered(ALICE, "Alice")
+    for command, args in ((botmod.mystats, ()), (botmod.mystatsfull, ("Alice",))):
+        in_channel, by_dm = make_ctx(ALICE), dm_ctx(ALICE)
+        run(command, in_channel, *args)
+        run(command, by_dm, *args)
+        assert said(by_dm) == said(in_channel) and reactions(by_dm) == reactions(in_channel) == []
+    assert membership["asked"] == [ALICE, ALICE]                           # asked for the DMs only
+
+
+@pytest.mark.parametrize("status, words", [(False, "This is only for members of the server."), (None, "couldn't check")])
+def test_mystats_in_a_dm_from_someone_not_on_the_server_or_unchecked_is_refused(played, membership, status, words):
+    registered(ALICE, "Alice")
+    membership["status"] = status
+    for command in (botmod.mystats, botmod.mystatsfull):
+        ctx = dm_ctx(ALICE)
+        run(command, ctx)
+        assert reactions(ctx) == [NO] and words in said(ctx)[0]
+        ctx.command.reset_cooldown.assert_called_once_with(ctx)             # a refusal doesn't burn the cooldown
+    assert played["calls"] == []                                            # nothing fetched
+
+
+def test_mystats_in_the_channel_does_not_check_membership(played, membership):
+    registered(ALICE, "Alice")
+    run(botmod.mystats, make_ctx(ALICE))
+    run(botmod.mystatsfull, make_ctx(ALICE))
+    assert membership["asked"] == [] and len(played["calls"]) == 2
+
+
 def test_a_removed_player_cannot_be_looked_up(played):
     registered(ALICE, "Alice")
     store.remove_player("chess.com", "Alice")
