@@ -76,7 +76,7 @@ loops (each starts only once, even if Discord reconnects):
 | `daily_posts` | 9am UK | The 100GOB sign-up call and the month-end table, if due (`ANNOUNCEMENTS`), then the results update on `RESULTS_UPDATE_DAYS` (10th, 20th) and the call's day (`RESULTS_UPDATES`). Each is claimed in `announcements` so it goes out once; a missed results update is posted late only as the latest one due. |
 
 It also registers the Delete button for DMs (so old buttons keep working after a restart) and registers the slash
-commands (`/obit`, `/export`) in each server that has an allowed channel. If Discord refuses that with "Missing Access",
+commands (`/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext`) in each server that has an allowed channel. If Discord refuses that with "Missing Access",
 the bot was invited without the `applications.commands` scope: re-authorise it (README, "Slash commands").
 
 **Where a command may be used** is decided by one global check, `_in_allowed_channel`, registered with `@bot.check`
@@ -86,7 +86,8 @@ discord.py does, so that cannot go unnoticed again):
 - In a server: only in `ALLOWED_CHANNEL_IDS`, and never the system commands.
 - In a DM to the bot: `!obit`, `!export` and `!backfill` (for anyone who is on the server and registered to an account),
   `!history` and `!lastgame` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
-  anyone who is on the server and registered, their own accounts only), `!clear` (deletes
+  anyone who is on the server and registered, their own accounts only), `!mystats` and `!mystatsfull` (for anyone who is
+  on the server; they work in the channel too), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
   admin system commands `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor` (admins only). Nothing else.
 - Slash commands check the channel themselves.
@@ -99,7 +100,8 @@ the server; non-admins keep to one account per site).
 **Membership.** "On the server" is checked with `guild.fetch_member`. In a DM the check is strict: not confirmed means
 refused. For an action that isn't a DM (`!add @member`, delivering a queued review) only a confirmed "not a member" blocks.
 
-**Keeping the channel quiet.** `!obit`, `!export`, `!backfill`, `!history` and `!myhistory` reply by DM; `/obit`, `/export`
+**Keeping the channel quiet.** `!obit`, `!export`, `!backfill`, `!history`, `!myhistory` and `!lastgame` work only by DM,
+and `!mystats` and `!mystatsfull` can be sent by DM as well as in the channel; `/obit`, `/export`
 and `/backfill` answer only the person who asked (ephemeral) - `!history` and `!myhistory` have no slash version yet.
 `/100gob` and `/100gobnext` do the same for the monthly sign-ups (a private reply, plus a DM confirming the sign-up to
 whoever asked); `!100gob` and `!100gobnext` still work in the channel with a ✅.
@@ -164,7 +166,7 @@ disk. To restore: stop the bot, copy a backup over the live file, start the bot.
    totals rewritten from that (the running totals are not trusted for the final figure); next month's rows are created;
    the final table is posted at 9am UK. If any player's fetch fails, nothing is written and the failures are named.
    `!closemonth` (admin, DM) runs the same job by hand; it never closes or posts twice.
-4. **Show it**: `!results [month]`, `!mystats`, `!mystatsfull`, `!history`, `!myhistory` and `!lastgame` (DM commands). `!results` reads the stored totals only.
+4. **Show it**: `!results [month]`, `!mystats` and `!mystatsfull` (channel or DM), `!history`, `!myhistory` and `!lastgame` (DM commands). `!results` reads the stored totals only.
    `!mystats` fetches a month's games (through `gamecache`) because openings and splits need the details, so it is
    throttled (`COOLDOWN_SECONDS`) and polite to the sites (`sources.py`: serial per site, timeouts, spacing).
 
@@ -475,7 +477,7 @@ Counts only, 35 days.
 
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
-| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame` (anyone on the server) | `/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext` |
+| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame`, `!mystats`, `!mystatsfull` (anyone on the server; the last two also in the channel) | `/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext` |
 | Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 

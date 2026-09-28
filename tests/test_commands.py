@@ -18,7 +18,7 @@ import sources
 import store
 
 OK, NO = "✅", "❌"
-ALICE, BOB, MATT_ADMIN = 1001, 1002, min(botmod.ADMIN_USER_IDS)
+ALICE, BOB, ADMIN = 1001, 1002, min(botmod.ADMIN_USER_IDS)
 
 
 @pytest.fixture(autouse=True)
@@ -165,16 +165,16 @@ def test_one_members_account_does_not_use_up_someone_elses_slot(site):
 
 
 def test_admins_are_not_limited_and_can_register_several_accounts(site):
-    run(botmod.add, make_ctx(MATT_ADMIN), "admin_one", "chess.com")
-    ctx = make_ctx(MATT_ADMIN)
+    run(botmod.add, make_ctx(ADMIN), "admin_one", "chess.com")
+    ctx = make_ctx(ADMIN)
     run(botmod.add, ctx, "admin_two", "chess.com")
     assert reactions(ctx) == [OK]
-    assert len(store.accounts_of(MATT_ADMIN)) == 2
+    assert len(store.accounts_of(ADMIN)) == 2
 
 
 def test_an_admin_can_add_an_account_for_a_member_who_already_has_one_on_that_site(site):
     run(botmod.add, make_ctx(BOB), "bob_cc", "chess.com")
-    ctx = make_ctx(MATT_ADMIN)
+    ctx = make_ctx(ADMIN)
     run(botmod.add, ctx, "bobs_second", "chess.com", SimpleNamespace(id=BOB))
     assert reactions(ctx) == [OK]
     assert len(store.accounts_of(BOB)) == 2  # the admin's deliberate choice
@@ -254,7 +254,7 @@ def test_add_for_someone_else_needs_an_admin(site):
 
 
 def test_an_admin_can_add_someone_else_who_then_owns_it(site):
-    ctx = make_ctx(MATT_ADMIN)
+    ctx = make_ctx(ADMIN)
     run(botmod.add, ctx, "friend", "chess.com", SimpleNamespace(id=BOB))
     assert reactions(ctx) == [OK]
     assert store.get_player("chess.com", "friend").added_by == BOB
@@ -267,7 +267,7 @@ def test_naming_yourself_as_owner_is_not_adding_someone_else(site):
 
 
 def test_an_admins_rejection_does_not_try_to_refund_a_cooldown_they_never_had(site):
-    ctx = make_ctx(MATT_ADMIN)
+    ctx = make_ctx(ADMIN)
     run(botmod.add, ctx, "x_y", "example.org")
     assert reactions(ctx) == [NO]
     ctx.command.reset_cooldown.assert_not_called()  # admins have no bucket; resetting it would crash
@@ -338,7 +338,7 @@ def test_someone_else_cannot_remove_it(site):
 
 def test_an_admin_can_remove_anyones_player(site):
     added(ALICE)
-    ctx = make_ctx(MATT_ADMIN)
+    ctx = make_ctx(ADMIN)
     run(botmod.remove, ctx, "alice")
     assert reactions(ctx) == [OK]
     assert store.find_active("alice") == []
@@ -453,7 +453,7 @@ def test_100gob_for_someone_elses_account_needs_an_admin():
 
 def test_an_admin_can_put_anyone_in_100gob():
     registered(ALICE)
-    ctx = make_ctx(MATT_ADMIN)
+    ctx = make_ctx(ADMIN)
     run(botmod.gob, ctx, "alice")
     assert reactions(ctx) == [OK] and in_challenge()
 
@@ -550,7 +550,7 @@ def test_100gobnext_follows_the_same_ownership_rule():
     run(botmod.gob_next, ctx, "alice")
     assert reactions(ctx) == [NO] and "only whoever added" in said(ctx)[0]
     assert store.signups(next_month()) == []
-    ctx = make_ctx(MATT_ADMIN)
+    ctx = make_ctx(ADMIN)
     run(botmod.gob_next, ctx, "alice")
     assert reactions(ctx) == [OK] and store.signups(next_month()) == ["alice"]
 
@@ -645,10 +645,10 @@ def test_slash_100gob_joins_your_own_account_confirms_by_dm_and_says_done_privat
 def test_slash_100gob_an_admin_naming_a_members_account_gets_the_dm_and_the_member_does_not(dms):
     import render
     registered(ALICE)
-    interaction = make_interaction(MATT_ADMIN)
+    interaction = make_interaction(ADMIN)
     slash(botmod.gob_slash, interaction, "alice", "chess.com")
     assert in_challenge()
-    assert dms == [(MATT_ADMIN, [f"alice (chess.com) is in 100GOB for {render.month_title(sources.current_month())}."])]
+    assert dms == [(ADMIN, [f"alice (chess.com) is in 100GOB for {render.month_title(sources.current_month())}."])]
     assert private_reply(interaction) == "Done - I've sent you a DM."
 
 
@@ -1069,7 +1069,7 @@ def test_the_start_rating_comes_from_the_stored_month_row(played):
 
 
 def test_an_admin_asking_for_a_missing_player_has_no_cooldown_to_refund(played):
-    ctx = make_ctx(MATT_ADMIN)
+    ctx = make_ctx(ADMIN)
     run(botmod.mystats, ctx, "nobody")
     assert reactions(ctx) == [NO]
     ctx.command.reset_cooldown.assert_not_called()

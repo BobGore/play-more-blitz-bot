@@ -2,8 +2,9 @@
 
 A Discord bot that nudges a chess server to play more blitz. Members register their Chess.com or Lichess
 account, and the bot keeps a table of how many rated blitz games each has played this month, their results and
-their rating change. It also runs a monthly **100GOB** challenge (100 Games Of Blitz), posts the final table at
-the end of each month, and says well done to everyone who reached 100.
+their rating change. It also runs a monthly **100GOB** challenge (100 Games Of Blitz): it invites sign-ups before each month, posts the
+table so far on the 10th and 20th and on the sign-up day, then the final table at the end of the month, and says
+well done to everyone who reached 100.
 
 The bot keeps no score of its own: game counts and ratings always come from the two sites. It stores only the
 list of registered players and each month's totals.
@@ -20,8 +21,8 @@ see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).**
 | `!results [month]` | Anyone | This month so far for everyone registered: games, record, current rating, rating gain, 100GOB progress. Give a past month (`!results august`, `!results 2026-08`, `!results last`) for its final table. |
 | `!100gob [username] [site]` (also `/100gob`) | Whoever added the account, or an admin | Joins this month's 100GOB challenge. `/100gob` leaves nothing in the channel: a private reply only you see, plus a DM confirming the sign-up (to whoever asked, so an admin signing someone up gets it, not the member). |
 | `!100gobnext [username] [site]` (also `/100gobnext`) | Whoever added the account, or an admin | Signs up for next month's challenge. `/100gobnext` works the same way as `/100gob`: a private reply plus a DM confirmation. |
-| `!mystats [username] [site] [month]` (also `!stats`) | Anyone | One player's results, opening tables and best and worst opening, and, when their games have been analysed, an analysis block (accuracy by phase, average centipawn loss, mistakes per game). No name means your own account. |
-| `!mystatsfull [username] [site] [month]` (also `!statsfull`) | Anyone | Their records and splits by opponent rating, colour, weekday and time of day. |
+| `!mystats [username] [site] [month]` (also `!stats`) | Anyone, in the channel or in a direct message to the bot (by DM, only someone on the server) | One player's results, opening tables and best and worst opening, and, when their games have been analysed, an analysis block (accuracy by phase, average centipawn loss, mistakes per game). No name means your own account. |
+| `!mystatsfull [username] [site] [month]` (also `!statsfull`) | Anyone, in the channel or in a direct message to the bot (by DM, only someone on the server) | Their records and splits by opponent rating, colour, weekday and time of day. |
 | `!lastgame [username] [site]` | Anyone on the server, in a DM only | The bot's analysis of a player's most recent analysed game, for both sides: result, rating change, inaccuracies, mistakes, blunders, average centipawn loss, accuracy overall and by phase, with a link to the game. Any registered player can be named. Reads only what the bot already holds. Needs game analysis switched on. Works only in a direct message to the bot; in the channel it points you there. |
 | `!obit [game link or id]` in a direct message to the bot (also `/obit [game]` in the channel) | Registered members who are on the server, for their own games | A private review of one of your own games by direct message, in Nate Solon's OBIT order: Openings (name, accuracy by phase, the engine's score after 10 moves), Blunders (your worst moments with links to the position before each, on Lichess), Interesting (a lost-on-time flag, a win thrown away or saved, chances your opponent gave you) and a prompt for your Takeaway. No link means your latest game. A Lichess or Chess.com link works, or a bare id. If the game isn't analysed yet it goes to the front of the queue and the review follows by DM. Only games played by an account you registered; the channel only sees a tick. Every DM carries a Delete button, since Discord doesn't let you delete a bot's message in a DM yourself. With no game named it looks on the sites first, so a game played a minute ago counts as the latest (at most once every two minutes per person). `/obit` is a slash command whose only reply is one that just the person asking can see, so nothing appears in the channel. `!obit` works only in a direct message to the bot (a reaction and, if needed, a short reply, all private); in the channel it answers with a hint that removes itself after 20 seconds. In a direct message the bot checks that the person is a member of the server it serves, and refuses if it can't tell. Needs game analysis switched on. |
 | `!analysisq` (also `!analysisqueue`) | Admins only, in a direct message to the bot | How the analysis queue stands (waiting, done, skipped, failed), how long the oldest game has waited, and when the worker last asked for work. Silent for everyone else. |
@@ -88,7 +89,7 @@ You need Python 3.13 or newer.
    Bot** off.
 3. Invite it with the `bot` scope and permissions integer **68672** (View Channels, Send Messages, Read Message
    History, Add Reactions). Add nothing else.
-4. **Slash commands** (`/obit`) need the `applications.commands` scope as well: on the OAuth2 URL Generator tick both `bot`
+4. **Slash commands** (`/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext`) need the `applications.commands` scope as well: on the OAuth2 URL Generator tick both `bot`
    and `applications.commands`, keep the same permissions, and open the new link. A bot already in the server just
    authorises again; it doesn't need removing first. Without it the log says "couldn't register slash commands" and the
    `!` commands carry on as normal.
@@ -113,10 +114,10 @@ setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at s
 | Setting | Meaning | Default |
 | --- | --- | --- |
 | `ALLOWED_CHANNEL_IDS` | The only channels where commands work, comma separated. Also keeps the bot silent on other servers and in DMs. | the test channel |
-| `POST_CHANNEL_ID` | Where the bot's own posts go (final tables, the sign-up call). Should be one of the allowed channels. | the test channel |
-| `ALERT_USER_IDS` | Who is sent a private message when something needs attention (an unexpected error, a silent analysis worker, a missing backup, failing refreshes), comma separated. | Bob |
+| `POST_CHANNEL_ID` | Where the bot's own posts go (the sign-up call, the results updates, final tables). Should be one of the allowed channels. | the test channel |
+| `ALERT_USER_IDS` | Who is sent a private message when something needs attention (an unexpected error, a silent analysis worker, a missing backup, failing refreshes), comma separated. | the main admin |
 | `HEARTBEAT_URL` | An `https://` address the bot pings once a minute to say it is alive; a monitoring service tells you if the pings stop. Keep it in `.env`. See "Watching over the bot". | none |
-| `ADMIN_USER_IDS` | Who can remove anyone's entry, add for others, and run `!closemonth`, comma separated. | Bob and Matt |
+| `ADMIN_USER_IDS` | Who can remove anyone's entry, add for others, and run `!closemonth`, comma separated. | the main admin and the second admin |
 | `GOB_TARGET` | Games needed for the challenge. | 100 |
 | `REFRESH_INTERVAL_MINUTES` | How often totals refresh. | 30 |
 | `COOLDOWN_SECONDS` | Per-user cooldown on the commands that call the sites. Admins are exempt. | 600 |
@@ -190,7 +191,7 @@ To restore, stop the bot, copy the chosen backup over the database file, and sta
 
 ### Watching over the bot
 
-The bot tells you when something needs attention, by a private message to the people in `ALERT_USER_IDS` (just Bob to
+The bot tells you when something needs attention, by a private message to the people in `ALERT_USER_IDS` (just the main admin to
 begin with), headed "⚠ PlayMoreBlitz":
 
 - **An unexpected error** in a command (the command, the kind of error and the Discord ID of whoever ran it, so you can

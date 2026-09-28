@@ -98,14 +98,14 @@ POST_CHANNEL_ID = whole_number("POST_CHANNEL_ID", 1550558058793533471)  # test
 
 # Can !remove any entry, add for others and run !closemonth, and are exempt from the cooldown.
 ADMIN_USER_IDS = discord_ids("ADMIN_USER_IDS", {
-    810486671174795274,  # Bob
-    315229727629508609,  # Matt
+    810486671174795274,  # the main admin
+    315229727629508609,  # the second admin
 })
 
 # Who is sent a private message when something needs attention: an unexpected error, a silent analysis worker, a missing
-# backup, refreshes that keep failing. By default only Bob; add the other admin's ID here once the bot is live.
+# backup, refreshes that keep failing. By default only the main admin; add the second admin's ID here once the bot is live.
 ALERT_USER_IDS = discord_ids("ALERT_USER_IDS", {
-    810486671174795274,  # Bob
+    810486671174795274,  # the main admin
 })
 
 # An address the bot pings once a minute to say it is alive. A monitoring service (Healthchecks.io has a free one) can then
