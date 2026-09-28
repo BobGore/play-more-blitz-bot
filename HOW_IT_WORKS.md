@@ -85,7 +85,7 @@ discord.py does, so that cannot go unnoticed again):
 
 - In a server: only in `ALLOWED_CHANNEL_IDS`, and never the system commands.
 - In a DM to the bot: `!obit`, `!export` and `!backfill` (for anyone who is on the server and registered to an account),
-  `!history` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
+  `!history` and `!lastgame` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
   anyone who is on the server and registered, their own accounts only), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
   admin system commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` (admins only). Nothing else.
@@ -162,7 +162,7 @@ disk. To restore: stop the bot, copy a backup over the live file, start the bot.
    totals rewritten from that (the running totals are not trusted for the final figure); next month's rows are created;
    the final table is posted at 9am UK. If any player's fetch fails, nothing is written and the failures are named.
    `!closemonth` (admin, DM) runs the same job by hand; it never closes or posts twice.
-4. **Show it**: `!results [month]`, `!mystats`, `!mystatsfull`, `!history` and `!myhistory` (DM commands), `!lastgame`. `!results` reads the stored totals only.
+4. **Show it**: `!results [month]`, `!mystats`, `!mystatsfull`, `!history`, `!myhistory` and `!lastgame` (DM commands). `!results` reads the stored totals only.
    `!mystats` fetches a month's games (through `gamecache`) because openings and splits need the details, so it is
    throttled (`COOLDOWN_SECONDS`) and polite to the sites (`sources.py`: serial per site, timeouts, spacing).
 
@@ -467,7 +467,7 @@ Counts only, 35 days.
 
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
-| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!lastgame`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!history`, `!myhistory` (registered members who are on the server) | `/obit`, `/export`, `/backfill` |
+| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame` (anyone on the server) | `/obit`, `/export`, `/backfill` |
 | Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 

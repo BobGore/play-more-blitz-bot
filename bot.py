@@ -348,7 +348,7 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory")  # the private commands members can send the bot in a direct message
+DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory", "lastgame")  # the private commands members can send the bot in a direct message
 ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage", "gamestate")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
@@ -424,7 +424,7 @@ async def help_blitz_bot(ctx):
         "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB. Direct message only\n"
         "`!myhistory [site]` - your own months from what's been analysed - can include a month `!backfill` added that "
         "`!history` can't see. Direct message only\n"
-        "`!lastgame [username]` - the bot's analysis of a player's latest analysed game: both sides, with a link\n"
+        "`!lastgame [username]` - a player's latest analysed game: both sides, with a link. Direct message only\n"
         "`/obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), "
         "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Nothing appears in the "
         "channel. Or `!obit` by DM. Registered members on the server only\n"
@@ -819,10 +819,25 @@ async def closemonth(ctx):
         await _react(ctx, "❌")  # the failure notice has already been posted
 
 
+LASTGAME_HINT = "Send me `!lastgame [username] [site]` in a direct message: it works only there."
+
+
 @bot.command(name="lastgame")
 async def lastgame(ctx, username: Optional[str] = None, site: Optional[str] = None):
     """The bot's analysis of a player's most recent analysed game: both sides, with a link. Reads only what the bot
-    already holds, so it makes no calls to the chess sites and needs no cooldown."""
+    already holds, so it makes no calls to the chess sites and needs no cooldown. Direct messages only, and only for
+    someone who is on the server; any registered player can be named."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(LASTGAME_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
+        return
+    status = await _member_status(ctx.author.id)
+    if status is not True:
+        await _react(ctx, "❌")
+        await ctx.send(_not_a_member_text(status))
+        return
     player = await _pick_player(ctx, username, site, "lastgame")
     if player is None:
         return

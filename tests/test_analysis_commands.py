@@ -5,6 +5,7 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 from analysis_helpers import MONTH, NOW, analysed, register, side, spec
 from helpers import at, game
@@ -19,12 +20,30 @@ import store
 
 OK, NO = "✅", "❌"
 ALICE, BOB, ADMIN = 1001, 1002, min(botmod.ADMIN_USER_IDS)
+CHANNEL, DM_CHANNEL = 555, 777
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(settings, "ANALYSIS_ENABLED", True)
+
+
+def the_server(*member_ids):
+    async def fetch_member(user_id):
+        if user_id in member_ids:
+            return SimpleNamespace(id=user_id)
+        raise discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "Unknown Member")
+    return SimpleNamespace(id=1, fetch_member=AsyncMock(side_effect=fetch_member))
+
+
+@pytest.fixture
+def on_the_server(monkeypatch):
+    """!lastgame is a DM command and checks membership, as in test_history.py: Alice and Bob are on the server."""
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", {CHANNEL})
+    channel = SimpleNamespace(id=CHANNEL, guild=the_server(ALICE, BOB), send=AsyncMock())
+    monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: channel if channel_id == CHANNEL else None)
+    return channel
 
 
 class Typing:
@@ -38,6 +57,19 @@ class Typing:
 def make_ctx(author_id):
     return SimpleNamespace(author=SimpleNamespace(id=author_id), message=SimpleNamespace(add_reaction=AsyncMock()), send=AsyncMock(),
                            typing=lambda: Typing(), command=MagicMock())
+
+
+def dm(author_id=ALICE):
+    """A direct message to the bot: no guild."""
+    ctx = make_ctx(author_id)
+    ctx.guild, ctx.channel = None, SimpleNamespace(id=DM_CHANNEL)
+    return ctx
+
+
+def in_the_channel(author_id=ALICE):
+    ctx = make_ctx(author_id)
+    ctx.guild, ctx.channel = SimpleNamespace(id=1), SimpleNamespace(id=CHANNEL)
+    return ctx
 
 
 def run(command, ctx, *args):
@@ -58,10 +90,11 @@ def member(owner=ALICE, name="alice_example", site="lichess"):
 
 # --- !lastgame ------------------------------------------------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_with_no_name_shows_the_callers_latest_analysed_game_as_a_panel():
     member()
     analysed(spec(1, white_rating_change=8), spec(2, "rival_example", "alice_example", black_rating_change=-6))
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     (text,) = said(ctx)
     assert reactions(ctx) == []
@@ -70,78 +103,117 @@ def test_lastgame_with_no_name_shows_the_callers_latest_analysed_game_as_a_panel
     assert "the bot's own estimate" in text
 
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_by_name_and_site_works_for_any_registered_player():
     member(BOB, "bob_example")
     member(ALICE, "alice_example")
     analysed(spec(1, "bob_example", "x_example"))
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx, "bob_example", "lichess")
     assert "`bob_example`" in said(ctx)[0]
 
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_says_how_many_are_still_waiting_when_some_are():
     member()
     analysed(spec(1))
     q.queue_games([spec(2), spec(3)], NOW)
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     assert "2 more of alice_example's games are waiting to be analysed." in said(ctx)[0]
 
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_when_nothing_is_analysed_yet_but_games_are_waiting():
     member()
     q.queue_games([spec(1), spec(2)], NOW)
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     assert said(ctx) == ["None of alice_example's games have been analysed yet (2 waiting)."]
 
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_when_analysis_is_off_and_when_it_is_on_but_empty(monkeypatch):
     member()
     monkeypatch.setattr(settings, "ANALYSIS_ENABLED", False)
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     assert said(ctx) == ["Game analysis isn't switched on yet."]
     monkeypatch.setattr(settings, "ANALYSIS_ENABLED", True)
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     assert "No analysed games for alice_example yet" in said(ctx)[0]
 
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_still_shows_games_analysed_before_analysis_was_switched_off(monkeypatch):
     member()
     analysed(spec(1))
     monkeypatch.setattr(settings, "ANALYSIS_ENABLED", False)
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     assert "<https://lichess.org/00000001>" in said(ctx)[0]
 
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_uses_the_same_account_picking_as_the_other_commands():
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     assert reactions(ctx) == [NO] and "haven't added an account" in said(ctx)[0]
     member()
     member(ALICE, "alice_cc", "chess.com")
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx)
     assert "you have 2 accounts" in said(ctx)[0] and "!lastgame" in said(ctx)[0]
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx, "nobody_example")
     assert "isn't on the list" in said(ctx)[0]
-    ctx = make_ctx(ALICE)
+    ctx = dm()
     run(botmod.lastgame, ctx, "alice_example", "myspace")
     assert "the site must be" in said(ctx)[0]
 
 
+@pytest.mark.usefixtures("on_the_server")
 def test_lastgame_makes_no_calls_to_the_chess_sites_and_has_no_cooldown(monkeypatch):
     async def forbidden(*a, **k):
         raise AssertionError("a site was called")
     monkeypatch.setattr(sources, "month_games", forbidden)
     member()
     analysed(spec(1))
-    run(botmod.lastgame, make_ctx(ALICE))
+    run(botmod.lastgame, dm())
     assert botmod.lastgame._buckets._cooldown is None
+
+
+def test_lastgame_in_the_channel_only_points_to_a_dm(monkeypatch):
+    def forbidden(*a, **k):
+        raise AssertionError("the database was read")
+    monkeypatch.setattr(analysis_reports, "player_games", forbidden)
+    ctx = in_the_channel()
+    run(botmod.lastgame, ctx)
+    ctx.send.assert_awaited_once_with(botmod.LASTGAME_HINT, delete_after=botmod.TEXT_STAYS_SECONDS)
+    assert "direct message" in botmod.LASTGAME_HINT and reactions(ctx) == []
+
+
+def test_lastgame_refuses_someone_who_is_not_on_the_server(on_the_server):
+    member()
+    analysed(spec(1))
+    on_the_server.guild = the_server(BOB)                                   # alice is not on this server
+    ctx = dm()
+    run(botmod.lastgame, ctx)
+    assert reactions(ctx) == [NO] and said(ctx) == ["This is only for members of the server."]
+
+
+@pytest.mark.usefixtures("on_the_server")
+def test_lastgame_in_a_dm_can_name_another_registered_player():
+    member(ALICE, "alice_example")
+    analysed(spec(1))
+    ctx = dm(BOB)                                                           # bob has no account of his own
+    run(botmod.lastgame, ctx, "alice_example")
+    assert "`alice_example` · Lichess" in said(ctx)[0] and reactions(ctx) == []
+
+
+def test_lastgame_is_a_dm_command():
+    assert "lastgame" in botmod.DM_COMMANDS
 
 
 # --- !analysisQ ---------------------------------------------------------------------------------------------------------------------
@@ -430,7 +502,10 @@ def test_mystatsfull_does_not_carry_the_analysis_part(played):
     assert "Analysis" not in "\n".join(said(ctx))
 
 
-def test_the_help_lists_lastgame():
+def test_the_help_lists_lastgame_as_dm_only_after_the_history_commands():
     ctx = make_ctx(ALICE)
     run(botmod.help_blitz_bot, ctx)
-    assert "`!lastgame [username]`" in said(ctx)[0]
+    text = said(ctx)[0]
+    line = next(l for l in text.split("\n") if l.startswith("`!lastgame [username]`"))
+    assert line.endswith(". Direct message only")
+    assert text.index("`!history [username]`") < text.index("`!myhistory [site]`") < text.index("`!lastgame [username]`")
