@@ -100,6 +100,6 @@ def test_a_failure_to_post_the_hint_is_survived():
 
 def test_the_readme_says_the_system_commands_are_for_a_direct_message():
     readme = open(botmod.__file__.replace("bot.py", "README.md"), encoding="utf-8").read()
-    for name in ("!setowner <username> <@member> [site]", "!closemonth", "!analysisq", "!queuemonth"):
+    for name in ("!setowner <username> <@member> [site]", "!closemonth", "!analysisq", "!queuemonth [month]"):
         line = next(l for l in readme.splitlines() if l.startswith(f"| `{name}`"))
         assert "in a direct message to the bot" in line

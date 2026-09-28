@@ -1269,7 +1269,7 @@ async def _backfill_flow(user_id, month_text):
 
 async def _backfill_steps(user_id, month_text):
     """Fetch one of the caller's own past months from its site and queue it for analysis - the same thing !queuemonth
-    does for everyone's current month, but for one person and any month, including from before they registered or
+    does for everyone's games for a month, but for one person and any month, including from before they registered or
     before analysis was switched on. Returns (text, error): `error` is text saying why not, else None."""
     accounts = await asyncio.to_thread(store.accounts_of, user_id)
     if not accounts:
@@ -1316,7 +1316,7 @@ async def _backfill_steps(user_id, month_text):
 @bot.command(name="backfill")
 async def backfill_command(ctx, month: Optional[str] = None):
     """Fetch one of your own past months from its site and queue it for analysis, same as !queuemonth does for everyone's
-    current month. For games from before you registered, or a month analysis missed. Direct messages only, and only for a
+    games for a month. For games from before you registered, or a month analysis missed. Direct messages only, and only for a
     registered member who is on the server. `!backfill <month>`, e.g. `!backfill november` or `!backfill 2025-11`."""
     if not _in_dm(ctx):
         try:
@@ -1441,27 +1441,32 @@ _queuemonth_lock = asyncio.Lock()
 
 @bot.command(name="queuemonth")
 @commands.check(_admin_only)
-async def queuemonth(ctx):
-    """Admins only: put this month's games so far, for every registered player, in the analysis queue.
+async def queuemonth(ctx, month: Optional[str] = None):
+    """Admins only: put a month's games, for every active registered player, in the analysis queue - this month so far
+    if no month is given, else any past month (`!queuemonth 2026-08`, `august`, `last`).
 
-    The refresher only queues games it sees from now on, so this catches up the month's earlier games. It fetches each
-    player's month from their site, one player at a time, so it can take a few minutes. Safe to run again."""
+    The refresher only queues games it sees from now on, so this catches up the month's earlier games, or a whole past
+    month for everyone (`!backfill` does a past month for a member's own accounts only). It fetches each player's month
+    from their site, one player at a time, so it can take a few minutes. Safe to run again."""
     if not settings.ANALYSIS_ENABLED:
         await _reject(ctx, "analysis is switched off (`ANALYSIS_ENABLED`)")
+        return
+    chosen = await _month_or_reject(ctx, month, sources.current_month())
+    if chosen is None:
         return
     if _queuemonth_lock.locked():
         await _reject(ctx, "it's already running - wait for it to finish")
         return
     async with _queuemonth_lock:
         async with ctx.typing():
-            result = await analysis_feed.backfill(sources.current_month(), datetime.now(timezone.utc))
+            result = await analysis_feed.backfill(chosen, datetime.now(timezone.utc))
     outcome = result.outcome
     queued = outcome[analysis_queue.QUEUED] + outcome[analysis_queue.QUEUED_LOW]
-    text = (f"Queued {queued} game(s) from {result.players} player(s) for analysis "
+    text = (f"Queued {queued} game(s) for {render.month_title(chosen)} from {result.players} player(s) for analysis "
             f"({outcome[analysis_queue.ALREADY_QUEUED]} were already queued, {outcome[analysis_queue.OVER_LIMIT]} over the monthly limit).")
     if result.failures:
         text += "\nCouldn't do: " + "; ".join(f"{name} ({site}): {sources.shorten(why, 80)}" for name, site, why in result.failures)
-    log.info("!queuemonth by %s: %s", ctx.author.id, dict(outcome))
+    log.info("!queuemonth %s by %s: %s", chosen, ctx.author.id, dict(outcome))
     await ctx.send(text)
     if not result.failures:
         await _tick(ctx)

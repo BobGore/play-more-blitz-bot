@@ -88,7 +88,7 @@ discord.py does, so that cannot go unnoticed again):
   `!history` and `!lastgame` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
   anyone who is on the server and registered, their own accounts only), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
-  admin system commands `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` (admins only). Nothing else.
+  admin system commands `!analysisq`, `!queuemonth [month]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
 **Ownership.** `players.added_by` is the Discord ID of the member the account belongs to. "My account" in `!mystats`,
@@ -444,6 +444,7 @@ per person per 30 s. Nothing is stored: files are made on request.
 game, but for one person's own accounts and a month they name (not the current month, which the refresher already keeps
 up with): games from before they registered, or a month analysis missed. One call to the person's site per account, so
 one backfill per person per 60 s. Queued games go through the same monthly limit tiers as any other (`analysis_queue.queue_games`).
+An admin's `!queuemonth <month>` does the same for every active player at once; `!backfill` is for a member's own accounts.
 
 **`!history [username] [site]`** — moved from the channel to a DM in the same pass as `!backfill`, on request, since
 it is one more piece of a person's own record next to `!obit`/`!export`/`!backfill` rather than a shared standings
@@ -468,7 +469,7 @@ Counts only, 35 days.
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
 | Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame` (anyone on the server) | `/obit`, `/export`, `/backfill` |
-| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` | |
+| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 
 ## 11. Watching over it
@@ -521,7 +522,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 | Every `!` command is ignored in the channel | The `@bot.check` decorator isn't on `_in_allowed_channel`. | `tests/test_obit.py` covers this; fix the decorator. |
 | `/obit` or `/export` not offered | Slash commands weren't registered. | Log line `slash commands registered in <id>: obit, export` at start-up; if it says "Missing Access", re-invite with the `applications.commands` scope; reload Discord. |
 | "I couldn't send you a DM" | The person's privacy setting blocks DMs from server members. | Turn on "Allow direct messages from server members". |
-| `!obit` says it can't find the game | It isn't in the table (played before registering/analysis, or the refresh hasn't seen it yet). | Wait for the next refresh (30 min), run `!obit` with no game (it looks at the sites first), `!queuemonth` for this month, or `!backfill <month>` for a past one. |
+| `!obit` says it can't find the game | It isn't in the table (played before registering/analysis, or the refresh hasn't seen it yet). | Wait for the next refresh (30 min), run `!obit` with no game (it looks at the sites first), `!queuemonth` for this month (or `!queuemonth <month>` for a past one, for everyone), or `!backfill <month>` for a past one of your own. |
 | Need to check one game's own state | Whatever the symptom, before reaching for `sqlite3`. | `!gamestate <link or id>` (admin, DM): the raw row, whoever's game it is. |
 | Games sit in `pending` | No worker asking. | `!analysisq`; see the worker alert row. |
 | Games sit in `claimed` | The worker died mid-batch. | Nothing: after 30 minutes they return to `pending` (5 tries, then `failed`). |
@@ -563,8 +564,8 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
   as `!obit`/`!export`, and is not a way to edit the shared record everyone else sees. `!myhistory` is the read side of
   that same choice: it deliberately reads `game_analysis` instead of `monthly_results`, so it can show a backfilled
   month and can disagree with `!history` - both are on purpose.
-- Analysis covers games played since it was switched on (plus `!queuemonth` for the current month, or `!backfill` for a
-  past one, per person).
+- Analysis covers games played since it was switched on (plus `!queuemonth [month]`, an admin's catch-up of any month
+  for everyone, or `!backfill` for a past month of a member's own accounts).
 - **Time-management reference curves for other time controls** (3+1, 3+2, 5+3, 5+5, ...): the reference in check 5 was measured on 3+0 and 5+0 games only, so other controls get no pace line. Deriving more is a planned development (same method: average the fraction of the base time left at each move over many public games of one time control).
 - Not built yet: takeaway tick-list and weekly `!obit` review, awards (weekly/monthly best game, most gained, and so on),
   a game-shape label, direct Google Sheets writing, a "forget me" command, deactivating accounts of people who leave the

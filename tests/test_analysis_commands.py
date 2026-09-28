@@ -324,7 +324,8 @@ def test_queuemonth_reports_what_it_queued_and_ticks(monkeypatch):
     ctx = make_ctx(ADMIN)
     run(botmod.queuemonth, ctx)
     assert calls == [sources.current_month()]
-    assert said(ctx) == ["Queued 65 game(s) from 4 player(s) for analysis (12 were already queued, 3 over the monthly limit)."]
+    month = botmod.render.month_title(sources.current_month())
+    assert said(ctx) == [f"Queued 65 game(s) for {month} from 4 player(s) for analysis (12 were already queued, 3 over the monthly limit)."]
     assert reactions(ctx) == [OK]
 
 
@@ -355,10 +356,68 @@ def test_queuemonth_really_queues_the_players_games_through_the_real_backfill(mo
     monkeypatch.setattr(sources, "month_games", fake_month_games)
     ctx = make_ctx(ADMIN)
     run(botmod.queuemonth, ctx)
-    assert "Queued 2 game(s) from 1 player(s)" in said(ctx)[0]
+    assert f"Queued 2 game(s) for {botmod.render.month_title(sources.current_month())} from 1 player(s)" in said(ctx)[0]
     assert q.status(NOW)["counts"]["pending"] == 2
     run(botmod.queuemonth, make_ctx(ADMIN))          # again: nothing new
     assert q.status(NOW)["counts"]["pending"] == 2
+
+
+def monthly_backfill(monkeypatch):
+    """A fixed "now" of September 2026, and a backfill that records the month it was given."""
+    from collections import Counter
+    monkeypatch.setattr(sources, "current_month", lambda now=None: "2026-09")
+    calls = []
+    fake_backfill(monkeypatch, analysis_feed.Backfill(9, Counter({q.QUEUED: 42, q.ALREADY_QUEUED: 3})), calls)
+    return calls
+
+
+def test_queuemonth_with_a_month_queues_that_month_and_names_it(monkeypatch, caplog):
+    calls = monthly_backfill(monkeypatch)
+    ctx = make_ctx(ADMIN)
+    with caplog.at_level(logging.INFO, logger=botmod.log.name):
+        run(botmod.queuemonth, ctx, "2026-08")
+    assert calls == ["2026-08"]
+    assert said(ctx) == ["Queued 42 game(s) for August 2026 from 9 player(s) for analysis (3 were already queued, 0 over the monthly limit)."]
+    assert reactions(ctx) == [OK]
+    assert any("!queuemonth 2026-08" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("word, expected", [("august", "2026-08"), ("aug", "2026-08"), ("last", "2026-08"), ("october", "2025-10")])
+def test_queuemonth_reads_a_month_word_the_usual_way(monkeypatch, word, expected):
+    calls = monthly_backfill(monkeypatch)
+    run(botmod.queuemonth, make_ctx(ADMIN), word)
+    assert calls == [expected]
+
+
+@pytest.mark.parametrize("word, why", [("2026-10", "hasn't happened yet"), ("december", None), ("smarch", "I don't know the month")])
+def test_queuemonth_refuses_a_future_month_or_an_unknown_word_and_fetches_nothing(monkeypatch, word, why):
+    calls = monthly_backfill(monkeypatch)
+    ctx = make_ctx(ADMIN)
+    run(botmod.queuemonth, ctx, word)
+    if why is None:                                   # a month name on its own is its latest past occurrence, not the future one
+        assert calls == ["2025-12"]
+        return
+    assert calls == [] and reactions(ctx) == [NO] and why in said(ctx)[0]
+
+
+def test_queuemonth_really_queues_a_past_month_through_the_real_backfill(monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(sources, "current_month", lambda now=None: "2026-09")
+    member(ALICE, "alice_example")
+    asked = []
+    august = [game("W", when=at(5, 9, month=8), url="https://lichess.org/bbbbbbb1"),
+              game("L", when=at(6, 9, month=8), url="https://lichess.org/bbbbbbb2")]
+
+    async def fake_month_games(session, site_name, username, month, *, after=None, limit=None):
+        asked.append(month)
+        return august
+    monkeypatch.setattr(sources, "month_games", fake_month_games)
+    ctx = make_ctx(ADMIN)
+    run(botmod.queuemonth, ctx, "august")
+    assert asked == ["2026-08"]
+    assert "Queued 2 game(s) for August 2026 from 1 player(s)" in said(ctx)[0]
+    with sqlite3.connect(store.DB_PATH) as db:
+        assert db.execute("SELECT month, COUNT(*) FROM game_analysis GROUP BY month").fetchall() == [("2026-08", 2)]
 
 
 # --- the backfill itself ------------------------------------------------------------------------------------------------------------------
