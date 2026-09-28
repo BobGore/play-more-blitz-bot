@@ -101,6 +101,8 @@ refused. For an action that isn't a DM (`!add @member`, delivering a queued revi
 
 **Keeping the channel quiet.** `!obit`, `!export`, `!backfill`, `!history` and `!myhistory` reply by DM; `/obit`, `/export`
 and `/backfill` answer only the person who asked (ephemeral) - `!history` and `!myhistory` have no slash version yet.
+`/100gob` and `/100gobnext` do the same for the monthly sign-ups (a private reply, plus a DM confirming the sign-up to
+whoever asked); `!100gob` and `!100gobnext` still work in the channel with a ✅.
 Admin commands are DM-only. The bot never pings anyone by default (`AllowedMentions.none()`), except the one
 person whose review couldn't be delivered.
 
@@ -469,7 +471,7 @@ Counts only, 35 days.
 
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
-| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame` (anyone on the server) | `/obit`, `/export`, `/backfill` |
+| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame` (anyone on the server) | `/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext` |
 | Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 

@@ -10,6 +10,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 
 import bot as botmod
@@ -558,6 +559,162 @@ def test_100gobnext_with_no_account_says_to_add_one_first():
     ctx = make_ctx(ALICE)
     run(botmod.gob_next, ctx)
     assert reactions(ctx) == [NO] and "!add" in said(ctx)[0]
+
+
+# --- _find_player: the same reasons _pick_player gives -------------------------------------------------
+
+
+@pytest.mark.parametrize("setup, args, expected", [
+    ([], (None, None), "you haven't added an account yet - use `!add <username> <site>` first"),
+    ([("alice_cc", "chess.com"), ("alice_li", "lichess")], (None, None),
+     "you have 2 accounts: alice_cc (chess.com), alice_li (lichess) - say which, e.g. `!100gob alice_cc chess.com`"),
+    ([], ("nobody", None), "'nobody' isn't on the list"),
+    ([("alice", "chess.com"), ("alice", "lichess")], ("alice", None),
+     "alice is on the list for chess.com and lichess - say which, e.g. `!100gob alice chess.com`"),
+    ([], ("alice", "myspace"), "the site must be `chess.com` or `lichess`"),
+])
+def test_find_player_gives_the_reason_pick_player_sends(setup, args, expected):
+    for username, site_name in setup:
+        registered(ALICE, username, site_name)
+    player, error = asyncio.run(botmod._find_player(ALICE, *args, "100gob"))
+    assert player is None and error == expected
+    ctx = make_ctx(ALICE)
+    assert asyncio.run(botmod._pick_player(ctx, *args, "100gob")) is None
+    assert said(ctx) == [expected] and reactions(ctx) == [NO]
+
+
+def test_find_player_returns_the_account_and_no_reason():
+    registered(ALICE)
+    player, error = asyncio.run(botmod._find_player(ALICE, None, None, "100gob"))
+    assert (player.username, player.site, error) == ("alice", "chess.com", None)
+
+
+# --- /100gob and /100gobnext -----------------------------------------------
+
+
+SLASH_CHANNEL = 555
+
+
+@pytest.fixture
+def dms(monkeypatch):
+    """The blitz channel is SLASH_CHANNEL, and what the bot sends by DM is recorded as (user id, messages)."""
+    monkeypatch.setattr(botmod, "ALLOWED_CHANNEL_IDS", {SLASH_CHANNEL})
+    log = []
+
+    async def fake(user_id, messages):
+        log.append((user_id, messages))
+    monkeypatch.setattr(botmod, "_dm", fake)
+    return log
+
+
+def make_interaction(user_id=ALICE, channel_id=SLASH_CHANNEL):
+    return SimpleNamespace(user=SimpleNamespace(id=user_id), channel_id=channel_id,
+                           response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()))
+
+
+def slash(command, interaction, *args):
+    asyncio.run(command.callback(interaction, *args))
+
+
+def private_reply(interaction):
+    """The one private reply sent after deferring."""
+    interaction.followup.send.assert_awaited_once()
+    assert interaction.followup.send.await_args.kwargs == {"ephemeral": True}
+    return interaction.followup.send.await_args.args[0]
+
+
+def test_slash_100gob_only_works_in_the_blitz_channel(dms):
+    registered(ALICE)
+    interaction = make_interaction(channel_id=SLASH_CHANNEL + 1)
+    slash(botmod.gob_slash, interaction)
+    interaction.response.send_message.assert_awaited_once_with("This command only works in the blitz channel.", ephemeral=True)
+    assert not in_challenge() and dms == []
+
+
+def test_slash_100gob_joins_your_own_account_confirms_by_dm_and_says_done_privately(dms):
+    import render
+    registered(ALICE)
+    interaction = make_interaction()
+    slash(botmod.gob_slash, interaction)
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+    assert in_challenge()
+    assert dms == [(ALICE, [f"You're in 100GOB for {render.month_title(sources.current_month())}: alice (chess.com)."])]
+    assert private_reply(interaction) == "Done - I've sent you a DM."
+
+
+def test_slash_100gob_an_admin_naming_a_members_account_gets_the_dm_and_the_member_does_not(dms):
+    import render
+    registered(ALICE)
+    interaction = make_interaction(MATT_ADMIN)
+    slash(botmod.gob_slash, interaction, "alice", "chess.com")
+    assert in_challenge()
+    assert dms == [(MATT_ADMIN, [f"alice (chess.com) is in 100GOB for {render.month_title(sources.current_month())}."])]
+    assert private_reply(interaction) == "Done - I've sent you a DM."
+
+
+def test_slash_100gob_a_member_naming_someone_elses_account_is_refused_privately(dms):
+    registered(ALICE)
+    interaction = make_interaction(BOB)
+    slash(botmod.gob_slash, interaction, "alice")
+    assert "only whoever added alice" in private_reply(interaction)
+    assert not in_challenge() and dms == []
+
+
+def test_slash_100gob_already_in_or_a_closed_month_is_a_private_refusal_and_no_dm(dms):
+    registered(ALICE)
+    run(botmod.gob, make_ctx(ALICE))
+    interaction = make_interaction()
+    slash(botmod.gob_slash, interaction)
+    assert private_reply(interaction) == "alice is already in 100GOB this month" and dms == []
+    with store._transaction() as conn:
+        conn.execute("UPDATE monthly_results SET in_100gob = 0, closed_at = '2000-01-01T00:00:00+00:00'")
+    interaction = make_interaction()
+    slash(botmod.gob_slash, interaction)
+    assert "already closed for alice" in private_reply(interaction) and dms == []
+
+
+@pytest.mark.parametrize("failure", [
+    discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Cannot send messages to this user"),
+    discord.HTTPException(SimpleNamespace(status=500, reason="Server Error"), "boom"),
+])
+def test_slash_100gob_when_the_dm_cannot_be_sent_the_sign_up_stands_and_the_private_reply_confirms_it(monkeypatch, dms, failure):
+    import render
+    registered(ALICE)
+
+    async def refuse(user_id, messages):
+        raise failure
+    monkeypatch.setattr(botmod, "_dm", refuse)
+    interaction = make_interaction()
+    slash(botmod.gob_slash, interaction)
+    assert in_challenge()
+    reply = private_reply(interaction)
+    assert reply == f"You're in 100GOB for {render.month_title(sources.current_month())}: alice (chess.com).\n{botmod.NO_DM}"
+
+
+def test_slash_100gobnext_signs_up_for_next_month_before_its_row_exists(dms):
+    import render
+    registered(ALICE)
+    interaction = make_interaction()
+    slash(botmod.gob_next_slash, interaction)
+    assert store.signups(next_month()) == ["alice"] and not in_challenge()
+    assert dms == [(ALICE, [f"You're in 100GOB for {render.month_title(next_month())}: alice (chess.com)."])]
+    assert private_reply(interaction) == "Done - I've sent you a DM."
+    interaction = make_interaction()
+    slash(botmod.gob_next_slash, interaction)
+    assert private_reply(interaction) == f"alice is already in 100GOB for {render.month_title(next_month())}"
+
+
+def test_slash_100gob_commands_are_registered_with_their_descriptions():
+    commands_ = {c.name: c for c in botmod.bot.tree.get_commands()}
+    assert commands_["100gob"].description == "Join this month's 100GOB challenge (confirmed by DM)"
+    assert commands_["100gobnext"].description == "Sign up for next month's 100GOB challenge (confirmed by DM)"
+
+
+def test_the_help_lists_the_slash_100gob_forms_and_still_fits_in_one_message():
+    ctx = make_ctx(ALICE)
+    run(botmod.help_blitz_bot, ctx)
+    text = said(ctx)[0]
+    assert "Or `/100gob`" in text and "Or `/100gobnext`" in text and len(text) <= 2000
 
 
 def test_results_lists_who_has_signed_up_for_next_month():

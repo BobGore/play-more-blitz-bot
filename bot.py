@@ -418,8 +418,8 @@ async def help_blitz_bot(ctx):
         "`!remove <username> [site]` - takes a player off the list (whoever added them, or an admin)\n"
         "`!results [month]` - this month so far for everyone on the list (refreshed every "
         f"{REFRESH_INTERVAL_MINUTES} minutes), or a past month's final table: `!results august`, `!results last`\n"
-        f"`!100gob [username]` - join this month's challenge: {GOB_TARGET} games of blitz\n"
-        "`!100gobnext [username]` - sign up for next month's challenge\n"
+        f"`!100gob [username]` - join this month's challenge: {GOB_TARGET} games of blitz. Or `/100gob`\n"
+        "`!100gobnext [username]` - sign up for next month's challenge. Or `/100gobnext`\n"
         "`!mystats [username] [month]` - one player's results and openings this month, or another month (yours if no name)\n"
         "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time\n"
         "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB. Direct message only\n"
@@ -427,8 +427,8 @@ async def help_blitz_bot(ctx):
         "`!history` can't see. Direct message only\n"
         "`!lastgame [username]` - a player's latest analysed game: both sides, with a link. Direct message only\n"
         "`/obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), "
-        "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Nothing appears in the "
-        "channel. Or `!obit` by DM. Registered members on the server only\n"
+        "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Or `!obit` by DM. "
+        "Registered members on the server only\n"
         "`/export [period] [what]` - your own games as a CSV file for a spreadsheet, one file per account, sent by DM; period is "
         "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or `!export` by DM\n"
         "`/backfill <month>` - fetch one of your own past months (before registering, or one missed) for analysis: `2025-11` "
@@ -523,71 +523,101 @@ async def remove(ctx, username: str, site: Optional[str] = None):
     await _tick(ctx)
 
 
-async def _pick_player(ctx, username, site, command, *, refund_cooldown=False):
-    """Work out which registered account a command means, or say why it can't.
+async def _find_player(user_id, username, site, command):
+    """Work out which registered account a command means, or why it can't.
 
-    With no username it is the caller's own account (asking which if they have
+    With no username it is `user_id`'s own account (asking which if they have
     several). With one it is that registered player, on the given site if the same
-    name is on both. Returns a store.Player, or None after replying with the reason.
+    name is on both. Returns (store.Player, None), or (None, the reason as text).
     """
     if site is not None:
         site = site.lower()
         if site not in sources.SITES:
-            await _reject(ctx, "the site must be `chess.com` or `lichess`", refund_cooldown=refund_cooldown)
-            return None
+            return None, "the site must be `chess.com` or `lichess`"
 
     if username is None:
-        mine = await asyncio.to_thread(store.accounts_of, ctx.author.id)
+        mine = await asyncio.to_thread(store.accounts_of, user_id)
         if not mine:
-            await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` first", refund_cooldown=refund_cooldown)
-            return None
+            return None, "you haven't added an account yet - use `!add <username> <site>` first"
         if len(mine) > 1:
             names = ", ".join(f"{p.username} ({p.site})" for p in mine)
-            await _reject(
-                ctx,
-                f"you have {len(mine)} accounts: {names} - say which, e.g. `!{command} {mine[0].username} {mine[0].site}`",
-                refund_cooldown=refund_cooldown,
-            )
-            return None
-        return mine[0]
+            return None, f"you have {len(mine)} accounts: {names} - say which, e.g. `!{command} {mine[0].username} {mine[0].site}`"
+        return mine[0], None
 
     matches = await asyncio.to_thread(store.find_active, username, site)
     if not matches:
-        await _reject(ctx, f"'{sources.shorten(username)}' isn't on the list", refund_cooldown=refund_cooldown)
-        return None
+        return None, f"'{sources.shorten(username)}' isn't on the list"
     if len(matches) > 1:
         sites = " and ".join(m.site for m in matches)
-        await _reject(
-            ctx,
-            f"{username} is on the list for {sites} - say which, e.g. `!{command} {username} {matches[0].site}`",
-            refund_cooldown=refund_cooldown,
-        )
+        return None, f"{username} is on the list for {sites} - say which, e.g. `!{command} {username} {matches[0].site}`"
+    return matches[0], None
+
+
+async def _pick_player(ctx, username, site, command, *, refund_cooldown=False):
+    """_find_player for a `!` command: returns a store.Player, or None after replying with the reason."""
+    player, error = await _find_player(ctx.author.id, username, site, command)
+    if error is not None:
+        await _reject(ctx, error, refund_cooldown=refund_cooldown)
         return None
-    return matches[0]
+    return player
 
 
-async def _join_challenge(ctx, username, site, month, when, command):
-    """Shared by !100gob (this month) and !100gobnext (next month).
+async def _join_steps(user_id, username, site, month, when, command):
+    """Shared by !100gob and /100gob (this month) and !100gobnext and /100gobnext (next month).
 
     `when` is how a reply refers to the month ("this month", or its name) and
-    `command` is the command's own name, for the examples in replies.
+    `command` is the command's own name, for the examples in replies. Returns
+    (text, error): the DM confirmation on success, else None and why not.
     """
-    player = await _pick_player(ctx, username, site, command)
-    if player is None:
-        return
-    if username is not None and not _is_admin(ctx.author.id) and player.added_by != ctx.author.id:
-        await _reject(ctx, f"only whoever added {player.username}, or an admin, can put them in 100GOB")
-        return
+    player, error = await _find_player(user_id, username, site, command)
+    if error is not None:
+        return None, error
+    if username is not None and not _is_admin(user_id) and player.added_by != user_id:
+        return None, f"only whoever added {player.username}, or an admin, can put them in 100GOB"
 
     outcome = await asyncio.to_thread(store.join_100gob, player.site, player.username, month)
     if outcome == store.ALREADY:
-        await _reject(ctx, f"{player.username} is already in 100GOB {when}")
-        return
+        return None, f"{player.username} is already in 100GOB {when}"
     if outcome == store.NO_ROW:  # they were found active a moment ago, so the month must be closed
-        await _reject(ctx, f"{render.month_title(month)} is already closed for {player.username}")
+        return None, f"{render.month_title(month)} is already closed for {player.username}"
+    log.info("100GOB: %s on %s in for %s (by %s)", player.username, player.site, month, user_id)
+    if player.added_by == user_id:
+        return f"You're in 100GOB for {render.month_title(month)}: {player.username} ({player.site}).", None
+    return f"{player.username} ({player.site}) is in 100GOB for {render.month_title(month)}.", None
+
+
+async def _join_challenge(ctx, username, site, month, when, command):
+    """!100gob and !100gobnext: a ✅ on success, the reason otherwise (the confirmation text is for the slash versions' DM)."""
+    _, error = await _join_steps(ctx.author.id, username, site, month, when, command)
+    if error is not None:
+        await _reject(ctx, error)
         return
-    log.info("100GOB: %s on %s in for %s (by %s)", player.username, player.site, month, ctx.author.id)
     await _tick(ctx)
+
+
+async def _join_slash(interaction, username, site, month, when, command):
+    """/100gob and /100gobnext: nothing in the channel. A private reply, and on success a DM confirming the sign-up - to
+    whoever asked, so an admin signing someone else up gets it, not the member. If the DM can't be sent, the sign-up has
+    still happened, so the private reply carries the confirmation itself."""
+    if interaction.channel_id not in ALLOWED_CHANNEL_IDS:
+        await interaction.response.send_message("This command only works in the blitz channel.", ephemeral=True)
+        return
+    await _count(command, interaction.user.id)
+    await interaction.response.defer(ephemeral=True)
+    text, error = await _join_steps(interaction.user.id, username, site, month, when, command)
+    if error is not None:
+        await interaction.followup.send(error, ephemeral=True)
+        return
+    try:
+        await _dm(interaction.user.id, [text])
+    except discord.Forbidden:
+        await interaction.followup.send(f"{text}\n{NO_DM}", ephemeral=True)
+        return
+    except discord.HTTPException as exc:
+        log.warning("couldn't send a 100GOB confirmation to %s (%s)", interaction.user.id, exc.status)
+        await interaction.followup.send(f"{text}\n{NO_DM}", ephemeral=True)
+        return
+    await interaction.followup.send("Done - I've sent you a DM.", ephemeral=True)
 
 
 @bot.command(name="100gob")
@@ -602,6 +632,27 @@ async def gob_next(ctx, username: Optional[str] = None, site: Optional[str] = No
     """Sign up for next month's 100GOB challenge (next month means the month after the current UTC month)."""
     month = sources.next_month(sources.current_month())
     await _join_challenge(ctx, username, site, month, f"for {render.month_title(month)}", "100gobnext")
+
+
+@bot.tree.command(name="100gob", description="Join this month's 100GOB challenge (confirmed by DM)")
+@app_commands.describe(username="An account on the list (yours if left out)",
+                       site="Only needed if that name is on both chess.com and lichess")
+@app_commands.guild_only()
+async def gob_slash(interaction: discord.Interaction, username: Optional[str] = None,
+                    site: Optional[Literal["chess.com", "lichess"]] = None):
+    """The same as !100gob, but nothing appears in the channel: a private reply, and a DM confirming the sign-up."""
+    await _join_slash(interaction, username, site, sources.current_month(), "this month", "100gob")
+
+
+@bot.tree.command(name="100gobnext", description="Sign up for next month's 100GOB challenge (confirmed by DM)")
+@app_commands.describe(username="An account on the list (yours if left out)",
+                       site="Only needed if that name is on both chess.com and lichess")
+@app_commands.guild_only()
+async def gob_next_slash(interaction: discord.Interaction, username: Optional[str] = None,
+                         site: Optional[Literal["chess.com", "lichess"]] = None):
+    """The same as !100gobnext, but nothing appears in the channel: a private reply, and a DM confirming the sign-up."""
+    month = sources.next_month(sources.current_month())
+    await _join_slash(interaction, username, site, month, f"for {render.month_title(month)}", "100gobnext")
 
 
 MONTH_HELP = "try `2026-08`, `august` or `last`"
