@@ -84,6 +84,7 @@ USAGE = {
     "setowner": "!setowner <username> <@member> [site]",
     "backfillfor": "!backfillfor <username> <month> [site]",
     "gamestate": "!gamestate <game link or id>",
+    "obitfor": "!obitfor <game link or id> [username]",
 }
 
 intents = discord.Intents.default()
@@ -350,7 +351,7 @@ async def on_ready():
 
 
 DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory", "lastgame")  # the private commands members can send the bot in a direct message
-ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate")  # system-type commands: an admin's, and only in a direct message
+ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate", "obitfor")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
 
@@ -811,15 +812,69 @@ async def gamestate(ctx, game: str):
     if not refs:
         await _reject(ctx, f"I can't read '{sources.shorten(game)}' as a game: give a Lichess or Chess.com game link, or the game's id")
         return
-    row = None
-    for site, game_id in refs:
-        row = await asyncio.to_thread(obit.game_row, site, game_id)
-        if row is not None:
-            break
+    row = await _held_game(refs)
     if row is None:
         await _reject(ctx, "I don't hold anything for that game.")
         return
     await ctx.send(render_analysis.render_gamestate(row))
+
+
+async def _held_game(refs):
+    """The game_analysis row (a dict) for the first of `refs` (obit.candidates' pairs) the bot holds, whoever's game it is;
+    None if it holds none of them."""
+    for site, game_id in refs:
+        row = await asyncio.to_thread(obit.game_row, site, game_id)
+        if row is not None:
+            return row
+    return None
+
+
+@bot.command(name="obitfor")
+@commands.check(_admin_only)
+async def obitfor(ctx, game: str, username: Optional[str] = None):
+    """Admins only: the OBIT review of any registered player's game the bot has already analysed, sent to the admin - for
+    example to show a member what the bot does. Read only: a game not analysed yet isn't queued or waited for, it doesn't
+    count as the member's own OBIT, and the member isn't told. With no username, the review is from the side of whichever
+    player is registered; name one when both are."""
+    refs = obit.candidates(game)
+    if not refs:
+        await _reject(ctx, f"I can't read '{sources.shorten(game)}' as a game: give a Lichess or Chess.com game link, or the game's id")
+        return
+    row = await _held_game(refs)
+    if row is None:
+        await _reject(ctx, "I don't hold that game. If it's a registered player's, `!backfillfor <username> <month>` fetches its month.")
+        return
+    if username is not None:
+        side = obit.side_of(row, username)
+        if side is None:
+            await _reject(ctx, f"{sources.shorten(username)} didn't play in that game.")
+            return
+    else:
+        registered = [s for s in ("white", "black")
+                      if await asyncio.to_thread(store.find_active, row[f"{s}_username"], row["site"])]
+        if len(registered) == 2:
+            await _reject(ctx, f"Both players are registered: say whose review, e.g. `!obitfor {sources.shorten(game)} {row['white_username']}`")
+            return
+        if not registered:
+            await _reject(ctx, "Neither player in that game is registered.")
+            return
+        side = registered[0]
+    player = row[f"{side}_username"]
+    if row["status"] in (analysis_queue.PENDING, analysis_queue.CLAIMED):
+        outcome = "not analysed yet"
+        await _reject(ctx, "That game is in the analysis queue but not analysed yet: ask again once it is.")
+    elif row["status"] != analysis_queue.DONE:
+        outcome = "can't review"
+        await _reject(ctx, f"I couldn't review that game: {obit.cant_reason(row)}.")
+    else:
+        try:
+            await _dm(ctx.author.id, render_obit.render_obit(player, row["site"], row, side))
+            outcome = "sent"
+            await _tick(ctx)
+        except discord.HTTPException as exc:
+            outcome = f"couldn't send ({exc.status})"
+            await _reject(ctx, "I couldn't send that just now: try again in a moment")
+    log.info("!obitfor %s %s (%s) by %s: %s", row["site"], row["game_id"], side, ctx.author.id, outcome)
 
 
 @bot.command(name="usage")

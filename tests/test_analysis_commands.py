@@ -296,6 +296,140 @@ def test_gamestate_says_when_nothing_is_held_for_a_wellformed_id():
     assert reactions(ctx) == [NO] and said(ctx) == ["I don't hold anything for that game."]
 
 
+# --- !obitfor -------------------------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def obitfor_dms(monkeypatch):
+    """What !obitfor sends by DM, as (user id, messages); and it must never queue-jump, wait, or count as a member's OBIT."""
+    sent = []
+
+    async def fake_dm(user_id, messages):
+        sent.append((user_id, messages))
+    monkeypatch.setattr(botmod, "_dm", fake_dm)
+
+    def forbidden(*a, **k):
+        raise AssertionError("the game was prioritised")
+    monkeypatch.setattr(q, "prioritise", forbidden)
+    real_count = botmod._count
+
+    async def count(name, user_id=None):
+        assert name != botmod.usage_stats.OBIT_SENT, "counted as a member's OBIT"
+        await real_count(name, user_id)
+    monkeypatch.setattr(botmod, "_count", count)
+    return sent
+
+
+def set_status(status, skip_reason=None, game_id="00000001"):
+    import sqlite3
+    with sqlite3.connect(store.DB_PATH) as db:
+        db.execute("UPDATE game_analysis SET status = ?, skip_reason = ? WHERE game_id = ?", (status, skip_reason, game_id))
+
+
+def priority_of(game_id="00000001"):
+    import sqlite3
+    with sqlite3.connect(store.DB_PATH) as db:
+        return db.execute("SELECT priority FROM game_analysis WHERE game_id = ?", (game_id,)).fetchone()[0]
+
+
+def test_obitfor_is_admin_only():
+    assert botmod._admin_only in botmod.obitfor.checks
+
+
+def test_obitfor_sends_the_registered_players_review_to_the_admin_and_nothing_else(obitfor_dms):
+    import render_obit
+    member(owner=BOB, name="bob_example")
+    analysed(spec(1, "rival_example", "bob_example"))                     # bob had Black; his opponent isn't registered
+    row = analysis_reports.player_games("lichess", "bob_example", 1)[0]
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "https://lichess.org/00000001")
+    (to, messages), = obitfor_dms
+    assert to == ADMIN
+    assert messages == render_obit.render_obit("bob_example", "lichess", botmod.obit.game_row("lichess", "00000001"), "black")
+    assert "**OBIT** · `bob_example`" in messages[0] and row is not None
+    assert said(ctx) == [] and reactions(ctx) == [OK]                     # the review is the DM; nothing else is said
+
+
+def test_obitfor_with_a_username_reviews_that_side_even_when_both_are_registered(obitfor_dms):
+    member(owner=ALICE, name="alice_example")
+    member(owner=BOB, name="bob_example")
+    analysed(spec(1, "alice_example", "bob_example"))
+    for name, heading in (("bob_example", "`bob_example`"), ("ALICE_EXAMPLE", "`alice_example`")):
+        obitfor_dms.clear()
+        run(botmod.obitfor, make_ctx(ADMIN), "00000001", name)
+        (to, messages), = obitfor_dms
+        assert to == ADMIN and f"**OBIT** · {heading}" in messages[0]
+
+
+def test_obitfor_with_both_players_registered_and_no_name_asks_whose(obitfor_dms):
+    member(owner=ALICE, name="alice_example")
+    member(owner=BOB, name="bob_example")
+    analysed(spec(1, "alice_example", "bob_example"))
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "00000001")
+    assert reactions(ctx) == [NO] and said(ctx)[0].startswith("Both players are registered: say whose review")
+    assert "`!obitfor 00000001 alice_example`" in said(ctx)[0] and obitfor_dms == []
+
+
+def test_obitfor_when_neither_player_is_registered(obitfor_dms):
+    member()
+    analysed(spec(1))                                                     # alice_example v rival_example
+    store.remove_player("lichess", "alice_example")                      # since taken off the list: no active account left
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "00000001")
+    assert reactions(ctx) == [NO] and said(ctx) == ["Neither player in that game is registered."] and obitfor_dms == []
+
+
+def test_obitfor_a_name_that_did_not_play_in_the_game(obitfor_dms):
+    member()
+    analysed(spec(1))
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "00000001", "nobody_example")
+    assert reactions(ctx) == [NO] and said(ctx) == ["nobody_example didn't play in that game."] and obitfor_dms == []
+
+
+def test_obitfor_a_game_that_is_not_held_or_not_a_game(obitfor_dms):
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "00000001")
+    assert reactions(ctx) == [NO]
+    assert said(ctx) == ["I don't hold that game. If it's a registered player's, `!backfillfor <username> <month>` fetches its month."]
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "not a game")
+    assert reactions(ctx) == [NO] and "I can't read" in said(ctx)[0] and obitfor_dms == []
+
+
+@pytest.mark.parametrize("status", [q.PENDING, q.CLAIMED])
+def test_obitfor_a_game_not_analysed_yet_says_so_without_queue_jumping_or_waiting(obitfor_dms, status):
+    member()
+    q.queue_games([spec(1)], NOW)
+    set_status(status)
+    before = priority_of()
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "00000001")
+    assert reactions(ctx) == [NO] and said(ctx) == ["That game is in the analysis queue but not analysed yet: ask again once it is."]
+    assert obitfor_dms == [] and botmod.obit.outstanding() == [] and priority_of() == before
+
+
+@pytest.mark.parametrize("status, skip_reason, words", [
+    (q.SKIPPED, q.TOO_SHORT, "it was too short to say anything useful about"),
+    (q.FAILED, None, "the analysis failed (the bot's admin can see why)"),
+])
+def test_obitfor_a_game_that_cannot_be_reviewed_gives_obits_reason(obitfor_dms, status, skip_reason, words):
+    member()
+    q.queue_games([spec(1)], NOW)
+    set_status(status, skip_reason)
+    ctx = make_ctx(ADMIN)
+    run(botmod.obitfor, ctx, "00000001")
+    assert reactions(ctx) == [NO] and said(ctx) == [f"I couldn't review that game: {words}."] and obitfor_dms == []
+
+
+def test_obitfor_leaves_no_trace_on_the_game_or_the_counts(obitfor_dms):
+    member()
+    analysed(spec(1))
+    before = priority_of()
+    run(botmod.obitfor, make_ctx(ADMIN), "00000001")
+    assert len(obitfor_dms) == 1 and priority_of() == before and botmod.obit.outstanding() == []
+
+
 # --- !queuemonth ---------------------------------------------------------------------------------------------------------------------
 
 def test_queuemonth_is_admin_only():

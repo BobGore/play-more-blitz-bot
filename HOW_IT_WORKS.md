@@ -88,7 +88,7 @@ discord.py does, so that cannot go unnoticed again):
   `!history` and `!lastgame` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
   anyone who is on the server and registered, their own accounts only), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
-  admin system commands `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` (admins only). Nothing else.
+  admin system commands `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
 **Ownership.** `players.added_by` is the Discord ID of the member the account belongs to. "My account" in `!mystats`,
@@ -345,6 +345,10 @@ their latest (`latest_game`, after looking at the sites first if the throttle al
    `/obit` answers only the person asking. Every DM the bot sends carries a **Delete** button (`DeleteButton`, persistent),
    because Discord doesn't let anyone delete a bot's message in a DM themselves.
 
+The admin version, `!obitfor <game> [username]` (admin, DM), is read only: it sends the admin the review of a game
+that is already analysed, from a registered player's side, and never prioritises the game, adds to `obit_requests`
+or the reviews-sent count, or tells the member.
+
 ### The review, element by element (`render_obit.py`)
 
 Nothing in the review is worked out by an engine when it is sent. The worker analysed the game earlier and stored figures in one
@@ -472,7 +476,7 @@ Counts only, 35 days.
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
 | Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame` (anyone on the server) | `/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext` |
-| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate` | |
+| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 
 ## 11. Watching over it

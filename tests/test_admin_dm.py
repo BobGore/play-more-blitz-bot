@@ -32,7 +32,7 @@ def passes(user, guild, channel_id, command):
 
 
 def test_the_system_commands_are_named():
-    assert botmod.ADMIN_DM_COMMANDS == ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate")
+    assert botmod.ADMIN_DM_COMMANDS == ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate", "obitfor")
     for name in botmod.ADMIN_DM_COMMANDS:
         command = botmod.bot.get_command(name)
         assert command is not None and botmod._admin_only in command.checks                       # each is admin-only in its own right
@@ -101,6 +101,7 @@ def test_a_failure_to_post_the_hint_is_survived():
 def test_the_readme_says_the_system_commands_are_for_a_direct_message():
     readme = open(botmod.__file__.replace("bot.py", "README.md"), encoding="utf-8").read()
     for name in ("!setowner <username> <@member> [site]", "!closemonth", "!analysisq", "!queuemonth [month]",
-                 "!backfillfor <username> <month> [site]"):
+                 "!backfillfor <username> <month> [site]",
+                 "!obitfor <game link or id> [username]"):
         line = next(l for l in readme.splitlines() if l.startswith(f"| `{name}`"))
         assert "in a direct message to the bot" in line
