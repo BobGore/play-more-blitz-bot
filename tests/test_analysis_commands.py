@@ -309,10 +309,12 @@ def test_queuemonth_refuses_when_analysis_is_off(monkeypatch):
     assert reactions(ctx) == [NO] and "switched off" in said(ctx)[0]
 
 
-def fake_backfill(monkeypatch, result, calls=None):
-    async def backfill(month, now):
+def fake_backfill(monkeypatch, result, calls=None, players=None):
+    async def backfill(players_, month, now):
         if calls is not None:
             calls.append(month)
+        if players is not None:
+            players.append([(p.site, p.username) for p in players_])
         return result
     monkeypatch.setattr(analysis_feed, "backfill", backfill)
 
@@ -420,11 +422,124 @@ def test_queuemonth_really_queues_a_past_month_through_the_real_backfill(monkeyp
         assert db.execute("SELECT month, COUNT(*) FROM game_analysis GROUP BY month").fetchall() == [("2026-08", 2)]
 
 
+# --- !backfillfor -------------------------------------------------------------------------------------------------------------------
+
+def test_backfillfor_is_admin_only():
+    assert botmod._admin_only in botmod.backfillfor.checks
+
+
+def one_backfill(monkeypatch, result=None):
+    """A fixed "now" of September 2026 and a backfill that records the month and the players it was given."""
+    from collections import Counter
+    monkeypatch.setattr(sources, "current_month", lambda now=None: "2026-09")
+    calls, players = [], []
+    fake_backfill(monkeypatch, result or analysis_feed.Backfill(1, Counter({q.QUEUED: 14})), calls, players)
+    return calls, players
+
+
+def test_backfillfor_refuses_when_analysis_is_off(monkeypatch):
+    calls, _ = one_backfill(monkeypatch)
+    member()
+    monkeypatch.setattr(settings, "ANALYSIS_ENABLED", False)
+    ctx = make_ctx(ADMIN)
+    run(botmod.backfillfor, ctx, "alice_example", "2026-08")
+    assert calls == [] and reactions(ctx) == [NO] and "switched off" in said(ctx)[0]
+
+
+def test_backfillfor_uses_the_usual_account_picking_and_fetches_nothing_when_it_fails(monkeypatch):
+    calls, _ = one_backfill(monkeypatch)
+    ctx = make_ctx(ADMIN)
+    run(botmod.backfillfor, ctx, "nobody_example", "2026-08")
+    assert "isn't on the list" in said(ctx)[0] and reactions(ctx) == [NO]
+    member(ALICE, "alice_example", "lichess")
+    member(ALICE, "alice_example", "chess.com")
+    ctx = make_ctx(ADMIN)
+    run(botmod.backfillfor, ctx, "alice_example", "2026-08")                  # on both sites: which?
+    assert reactions(ctx) == [NO] and "chess.com" in said(ctx)[0] and "lichess" in said(ctx)[0]
+    assert calls == []
+
+
+@pytest.mark.parametrize("word, why", [("2026-10", "hasn't happened yet"), ("smarch", "I don't know the month")])
+def test_backfillfor_refuses_a_future_month_or_an_unknown_word_and_fetches_nothing(monkeypatch, word, why):
+    calls, _ = one_backfill(monkeypatch)
+    member()
+    ctx = make_ctx(ADMIN)
+    run(botmod.backfillfor, ctx, "alice_example", word)
+    assert calls == [] and reactions(ctx) == [NO] and why in said(ctx)[0]
+
+
+def test_backfillfor_queues_just_that_account_for_that_month_and_names_both(monkeypatch, caplog):
+    calls, players = one_backfill(monkeypatch)
+    member(ALICE, "alice_example", "lichess")
+    member(BOB, "bob_example", "lichess")
+    member(ALICE, "alice_example", "chess.com")
+    ctx = make_ctx(ADMIN)
+    with caplog.at_level(logging.INFO, logger=botmod.log.name):
+        run(botmod.backfillfor, ctx, "alice_example", "august", "lichess")
+    assert calls == ["2026-08"] and players == [[("lichess", "alice_example")]]
+    assert said(ctx) == ["Queued 14 game(s) for August 2026 for alice_example (lichess) for analysis (0 were already queued, 0 over the monthly limit)."]
+    assert reactions(ctx) == [OK]
+    assert any("!backfillfor 2026-08 lichess/alice_example by" in r.getMessage() for r in caplog.records)
+
+
+def test_backfillfor_allows_the_current_month(monkeypatch):
+    calls, _ = one_backfill(monkeypatch)
+    member()
+    run(botmod.backfillfor, make_ctx(ADMIN), "alice_example", "this")
+    assert calls == ["2026-09"]
+
+
+def test_backfillfor_names_a_fetch_failure_and_does_not_tick(monkeypatch):
+    from collections import Counter
+    one_backfill(monkeypatch, analysis_feed.Backfill(1, Counter(), [("alice_example", "lichess", "the site is down")]))
+    member()
+    ctx = make_ctx(ADMIN)
+    run(botmod.backfillfor, ctx, "alice_example", "2026-08")
+    assert "Couldn't do: alice_example (lichess): the site is down" in said(ctx)[0] and reactions(ctx) == []
+
+
+def test_backfillfor_waits_for_a_running_queuemonth(monkeypatch):
+    calls, _ = one_backfill(monkeypatch)
+    member()
+
+    async def go():
+        async with botmod._queuemonth_lock:
+            ctx = make_ctx(ADMIN)
+            await botmod.backfillfor.callback(ctx, "alice_example", "2026-08")
+            return ctx
+    ctx = asyncio.run(go())
+    assert calls == [] and reactions(ctx) == [NO] and "already running" in said(ctx)[0]
+
+
+def test_backfillfor_really_queues_only_that_players_games_through_the_real_backfill(monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(sources, "current_month", lambda now=None: "2026-09")
+    member(ALICE, "alice_example")
+    member(BOB, "bob_example")
+    asked = []
+
+    async def fake_month_games(session, site_name, username, month, *, after=None, limit=None):
+        asked.append((username, month))
+        return [game("W", when=at(5, 9, month=8), url="https://lichess.org/ccccccc1"),
+                game("L", when=at(6, 9, month=8), url="https://lichess.org/ccccccc2")]
+    monkeypatch.setattr(sources, "month_games", fake_month_games)
+    ctx = make_ctx(ADMIN)
+    run(botmod.backfillfor, ctx, "bob_example", "2026-08")
+    assert asked == [("bob_example", "2026-08")]
+    assert said(ctx)[0].startswith("Queued 2 game(s) for August 2026 for bob_example (lichess)")
+    with sqlite3.connect(store.DB_PATH) as db:
+        rows = db.execute("SELECT month, white_username, black_username FROM game_analysis").fetchall()
+    assert len(rows) == 2 and all(r[0] == "2026-08" and "bob_example" in r[1:] for r in rows)
+    ctx = make_ctx(ADMIN)
+    run(botmod.backfillfor, ctx, "bob_example", "2026-08")                   # again: nothing new
+    assert said(ctx)[0].startswith("Queued 0 game(s)") and "2 were already queued" in said(ctx)[0]
+
+
 # --- the backfill itself ------------------------------------------------------------------------------------------------------------------
 
 def run_backfill(month="2026-09"):
     from datetime import datetime, timezone
-    return asyncio.run(analysis_feed.backfill(month, datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)))
+    return asyncio.run(analysis_feed.backfill(store.active_players(), month, datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)))
 
 
 @pytest.fixture

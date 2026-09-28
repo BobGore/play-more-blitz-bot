@@ -17,7 +17,6 @@ import analysis_queue
 import game_records
 import settings
 import sources
-import store
 
 log = logging.getLogger("playmoreblitz.analysis")
 
@@ -45,8 +44,9 @@ class Backfill:
     failures: list = field(default_factory=list)  # (username, site, reason) for players whose games could not be fetched or queued
 
 
-async def backfill(month, now):
-    """Queue every active player's games for `month`, fetching each player's month in full, one after another.
+async def backfill(players, month, now):
+    """Queue `players`' games for `month`, fetching each player's month in full, one after another. `!queuemonth` passes
+    every active player, `!backfillfor` just one.
 
     For a month whose games the refresher never offered (analysis was off, or the players were added earlier). Games
     already queued are left as they are, so it can be run again safely. Does nothing if analysis is switched off.
@@ -54,7 +54,6 @@ async def backfill(month, now):
     result = Backfill()
     if not settings.ANALYSIS_ENABLED:
         return result
-    players = await asyncio.to_thread(store.active_players)
     result.players = len(players)
     async with aiohttp.ClientSession() as session:
         for player in players:

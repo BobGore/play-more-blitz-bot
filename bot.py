@@ -82,6 +82,7 @@ USAGE = {
     "usage": "!usage [days]",
     "clear": "!clear",
     "setowner": "!setowner <username> <@member> [site]",
+    "backfillfor": "!backfillfor <username> <month> [site]",
     "gamestate": "!gamestate <game link or id>",
 }
 
@@ -349,7 +350,7 @@ async def on_ready():
 
 
 DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory", "lastgame")  # the private commands members can send the bot in a direct message
-ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "closemonth", "setowner", "usage", "gamestate")  # system-type commands: an admin's, and only in a direct message
+ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
 
@@ -1459,15 +1460,50 @@ async def queuemonth(ctx, month: Optional[str] = None):
         return
     async with _queuemonth_lock:
         async with ctx.typing():
-            result = await analysis_feed.backfill(chosen, datetime.now(timezone.utc))
+            players = await asyncio.to_thread(store.active_players)
+            result = await analysis_feed.backfill(players, chosen, datetime.now(timezone.utc))
+    log.info("!queuemonth %s by %s: %s", chosen, ctx.author.id, dict(result.outcome))
+    await ctx.send(_backfill_text(result, chosen, f"from {result.players} player(s)"))
+    if not result.failures:
+        await _tick(ctx)
+
+
+def _backfill_text(result, month, who):
+    """The reply to an admin catch-up: what was queued for `month`, `who` saying whose games ("from 9 player(s)",
+    "for alice_example (lichess)"), and any player whose games couldn't be fetched."""
     outcome = result.outcome
     queued = outcome[analysis_queue.QUEUED] + outcome[analysis_queue.QUEUED_LOW]
-    text = (f"Queued {queued} game(s) for {render.month_title(chosen)} from {result.players} player(s) for analysis "
+    text = (f"Queued {queued} game(s) for {render.month_title(month)} {who} for analysis "
             f"({outcome[analysis_queue.ALREADY_QUEUED]} were already queued, {outcome[analysis_queue.OVER_LIMIT]} over the monthly limit).")
     if result.failures:
         text += "\nCouldn't do: " + "; ".join(f"{name} ({site}): {sources.shorten(why, 80)}" for name, site, why in result.failures)
-    log.info("!queuemonth %s by %s: %s", chosen, ctx.author.id, dict(outcome))
-    await ctx.send(text)
+    return text
+
+
+@bot.command(name="backfillfor")
+@commands.check(_admin_only)
+async def backfillfor(ctx, username: str, month: str, site: Optional[str] = None):
+    """Admins only: one registered account's games for one month into the analysis queue, e.g. `!backfillfor
+    alice_example 2026-08` or `!backfillfor alice_example august lichess`. The admin's one-account version of
+    `!queuemonth <month>`, for when only one player's month is wanted; like it, it feeds only `game_analysis`, never
+    the monthly totals, and tells the member nothing. Shares `!queuemonth`'s lock: one admin catch-up at a time."""
+    if not settings.ANALYSIS_ENABLED:
+        await _reject(ctx, "analysis is switched off (`ANALYSIS_ENABLED`)")
+        return
+    player = await _pick_player(ctx, username, site, "backfillfor")
+    if player is None:
+        return
+    chosen = await _month_or_reject(ctx, month, sources.current_month())
+    if chosen is None:
+        return
+    if _queuemonth_lock.locked():
+        await _reject(ctx, "it's already running - wait for it to finish")
+        return
+    async with _queuemonth_lock:
+        async with ctx.typing():
+            result = await analysis_feed.backfill([player], chosen, datetime.now(timezone.utc))
+    log.info("!backfillfor %s %s/%s by %s: %s", chosen, player.site, player.username, ctx.author.id, dict(result.outcome))
+    await ctx.send(_backfill_text(result, chosen, f"for {player.username} ({player.site})"))
     if not result.failures:
         await _tick(ctx)
 
