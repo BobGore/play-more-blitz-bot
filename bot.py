@@ -393,7 +393,7 @@ async def on_ready():
 
 
 DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory", "lastgame", "mystats", "mystatsfull")  # the commands members can send the bot in a direct message (mystats and mystatsfull also work in the channel)
-ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate", "obitfor")  # system-type commands: an admin's, and only in a direct message
+ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate", "obitfor", "say")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
 
@@ -971,6 +971,27 @@ async def closemonth(ctx):
         await _tick(ctx)
     else:
         await _react(ctx, "❌")  # the failure notice has already been posted
+
+
+SAY_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)  # a member can be named; never @everyone or a role
+
+
+@bot.command(name="say")
+@commands.check(_admin_only)
+async def say(ctx, *, message: str):
+    """Admins only, in a direct message: post `message` in the bot's channel (POST_CHANNEL_ID) as the bot, word for word."""
+    if len(message) > 2000:
+        await _reject(ctx, f"That's {len(message)} characters: Discord allows 2000 in one message. Split it in two.")
+        return
+    try:
+        posted = await (await _post_channel()).send(message, allowed_mentions=SAY_MENTIONS)
+    except discord.HTTPException as exc:
+        log.warning("!say by %s couldn't post (%s)", ctx.author.id, exc.status)
+        await _reject(ctx, "I couldn't post that just now: try again in a moment")
+        return
+    log.info("!say by %s posted %d characters", ctx.author.id, len(message))
+    await _tick(ctx)
+    await ctx.send(f"Posted: {posted.jump_url}")
 
 
 LASTGAME_HINT = "Send me `!lastgame [username] [site]` in a direct message: it works only there."

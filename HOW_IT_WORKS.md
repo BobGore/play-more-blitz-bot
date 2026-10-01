@@ -89,7 +89,7 @@ discord.py does, so that cannot go unnoticed again):
   anyone who is on the server and registered, their own accounts only), `!mystats` and `!mystatsfull` (for anyone who is
   on the server; they work in the channel too), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
-  admin system commands `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor` (admins only). Nothing else.
+  admin system commands `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor`, `!say <message>` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
 **Ownership.** `players.added_by` is the Discord ID of the member the account belongs to. "My account" in `!mystats`,
@@ -478,7 +478,7 @@ Counts only, 35 days.
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
 | Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame`, `!mystats`, `!mystatsfull` (anyone on the server; the last two also in the channel) | `/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext` |
-| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor` | |
+| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor`, `!say <message>` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 
 ## 11. Watching over it
