@@ -328,7 +328,7 @@ async def heartbeat_loop():
     _health["heartbeat_failing"] = not ok
 
 
-@tasks.loop(seconds=60)
+@tasks.loop(seconds=15)
 async def obit_loop():
     """Send the reviews people asked for once their games have been analysed (or say that they can't be)."""
     try:

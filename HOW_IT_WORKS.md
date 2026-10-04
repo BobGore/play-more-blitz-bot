@@ -70,7 +70,7 @@ loops (each starts only once, even if Discord reconnects):
 | Loop | How often | What it does |
 | --- | --- | --- |
 | `refresh_loop` | every `REFRESH_INTERVAL_MINUTES` (30) and once at start | Closes any finished month still open, refreshes every active player's running totals (which also feeds new games to the analysis queue), posts month-end things if due, prunes old usage counts. Tracks failing cycles. |
-| `obit_loop` | every 60 s | Sends the reviews people asked for once their game is analysed (see 9). |
+| `obit_loop` | every 15 s | Sends the reviews people asked for once their game is analysed (see 9). |
 | `health_loop` | every 5 min | Checks the analysis worker, and the backups; sends alerts (see 11). |
 | `heartbeat_loop` | every 60 s, only if `HEARTBEAT_URL` is set | Pings the outside monitor to say the bot is alive. |
 | `daily_posts` | 9am UK | The 100GOB sign-up call and the month-end table, if due (`ANNOUNCEMENTS`), then the results update on `RESULTS_UPDATE_DAYS` (10th, 20th) and the call's day (`RESULTS_UPDATES`). Each is claimed in `announcements` so it goes out once; a missed results update is posted late only as the latest one due. |
@@ -339,7 +339,7 @@ their latest (`latest_game`, after looking at the sites first if the throttle al
 1. if the game is analysed, sends the review at once (`render_obit.py`);
 2. if not, `analysis_queue.prioritise` moves it to the front (priority −1), a row goes into `obit_requests`, and the
    channel/DM says it is being analysed;
-3. `obit_loop` (every 60 s) sends the review when the game reaches `done`, or an apology if it can't be analysed
+3. `obit_loop` (every 15 s) sends the review when the game reaches `done`, or an apology if it can't be analysed
    (`failed`, `skipped`) or took over 24 hours. It first re-checks the person is still on the server; if not, the request
    is dropped silently. Whoever deletes the request row is the one that answers it (nobody answers twice); a failed DM
    puts it back to retry.

@@ -867,7 +867,7 @@ def test_the_delivery_loop_is_started_with_the_bot(monkeypatch):
     monkeypatch.setattr(botmod, "sync_slash_commands", AsyncMock())
     asyncio.run(botmod.on_ready())
     assert "obit_loop" in started
-    assert botmod.obit_loop.seconds == 60
+    assert botmod.obit_loop.seconds == 15
 
 
 def test_the_delivery_loop_is_not_started_twice(monkeypatch):
