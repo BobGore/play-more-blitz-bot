@@ -9,7 +9,8 @@ games to analyse over SSH, through worker_gateway.py, then for each game:
 
 The moves are held in memory while a game is analysed and never written to disk or sent to the bot's machine.
 Settings live in worker.env beside this file (see worker.env.example). Run `python worker.py`; add --once to
-stop when the queue is empty, or --check to test the connection and the engine and stop.
+stop when the queue is empty, or --check to test the connection and the engine and stop. To stop it cleanly, create
+a file named STOP beside worker.env: it finishes and reports the batch in hand, deletes the file and exits.
 """
 
 import argparse
@@ -526,6 +527,21 @@ def serve(gateway, http, engine, config, *, once=False, sleep=time.sleep, stop=l
             sleep(config.idle_sleep)
 
 
+# --- stopping cleanly -------------------------------------------------------------------------------------------------------------
+
+STOP_FILE_NAME = "STOP"  # put beside worker.env to ask the worker to finish its batch and stop (it deletes the file)
+
+
+def nap(seconds, stop, *, clock=time.monotonic, sleep=time.sleep, step=1.0):
+    """Sleep `seconds`, but wake within `step` seconds once `stop()` says so (an idle worker stops promptly)."""
+    end = clock() + seconds
+    while not stop():
+        left = end - clock()
+        if left <= 0:
+            return
+        sleep(min(step, left))
+
+
 # --- starting up ------------------------------------------------------------------------------------------------------------------
 
 def setup_logging(log_file=""):
@@ -562,7 +578,14 @@ def main(argv=None):
             engine.evaluate(chess.Board(), object())
             log.info("engine ready: %s", engine.name)
             return 0
-        serve(gateway, http, engine, config, once=args.once)
+        # A STOP file beside the settings is checked between batches, never mid-batch: the batch in hand is finished and
+        # reported first, so nothing goes back in the queue to wait out ANALYSIS_CLAIM_MINUTES.
+        stop_file = Path(args.config).with_name(STOP_FILE_NAME)
+        stop = stop_file.exists
+        serve(gateway, http, engine, config, once=args.once, stop=stop, sleep=lambda seconds: nap(seconds, stop))
+        if stop():
+            log.info("stopped: asked to by the %s file", STOP_FILE_NAME)
+            stop_file.unlink(missing_ok=True)
     except GatewayError as why:
         log.error("Problem: %s", why)  # to the log file too, for a worker that runs as a service with no screen
         return 1

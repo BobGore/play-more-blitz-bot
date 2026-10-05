@@ -405,6 +405,70 @@ def test_a_lost_connection_is_waited_out_and_tried_again():
     assert naps == [60, 60, 5]
 
 
+def test_a_stop_request_mid_batch_lets_the_batch_finish_and_report():
+    setup_queue(*[record("lichess", f"ggggggg{n}", "alice_example", "zed_example", n) for n in range(1, 24)])
+    http = FakeHttp()
+    http.lichess = {f"ggggggg{n}": li(RUY) for n in range(1, 24)}
+    asked = []
+
+    class AskedToStopDuringTheFirstBatch(Direct):
+        def claim(self, n):
+            jobs = super().claim(n)
+            asked.append(True)  # the STOP file appears while this batch is being analysed
+            return jobs
+
+    config = w.Config("user@host", "key", "sf", batch_size=10, nodes=1000)
+    w.serve(AskedToStopDuringTheFirstBatch(), http, FakeEngine(), config, stop=lambda: bool(asked), sleep=lambda s: None)
+    counts = q.status(NOW)["counts"]
+    assert len(asked) == 1  # no second batch claimed
+    assert counts["done"] == 10 and counts["pending"] == 13 and counts.get("claimed", 0) == 0  # nothing left hanging
+
+
+def test_nap_sleeps_the_full_time_when_not_asked_to_stop():
+    now, naps = [0.0], []
+
+    def sleep(s):
+        naps.append(s)
+        now[0] += s
+
+    w.nap(3.5, lambda: False, clock=lambda: now[0], sleep=sleep)
+    assert naps == [1.0, 1.0, 1.0, 0.5]
+
+
+def test_nap_wakes_within_a_step_once_asked_to_stop():
+    now, naps = [0.0], []
+
+    def sleep(s):
+        naps.append(s)
+        now[0] += s
+
+    w.nap(300, lambda: now[0] >= 2, clock=lambda: now[0], sleep=sleep)
+    assert naps == [1.0, 1.0]
+
+
+def test_main_stops_cleanly_on_a_stop_file_and_deletes_it(monkeypatch, tmp_path, caplog):
+    path = tmp_path / "worker.env"
+    path.write_text("GATEWAY_TARGET=u@h\nGATEWAY_KEY=/k\nSTOCKFISH_PATH=/sf\n", encoding="utf-8")
+    (tmp_path / w.STOP_FILE_NAME).write_text("", encoding="utf-8")
+    claims = []
+
+    class Idle(w.Gateway):
+        def hello(self):
+            return {"protocol": w.PROTOCOL, "method_version": analysis.METHOD_VERSION}
+
+        def claim(self, n):
+            claims.append(n)
+            return []
+
+    monkeypatch.setattr(w, "Gateway", Idle)
+    monkeypatch.setattr(w, "setup_logging", lambda path="": None)
+    with caplog.at_level(logging.INFO, logger=w.log.name):
+        assert w.main(["--config", str(path)]) == 0
+    assert claims == []  # asked to stop before it started: claims nothing
+    assert not (tmp_path / w.STOP_FILE_NAME).exists()
+    assert "stopped: asked to by the STOP file" in caplog.text
+
+
 def test_with_once_a_lost_connection_is_an_error_not_a_wait():
     class Down(Direct):
         def claim(self, n):

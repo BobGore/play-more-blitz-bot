@@ -310,6 +310,11 @@ it (`Http`: Chess.com monthly archives, Lichess game export, spaced by `LICHESS_
 engine and stops; `--once` stops when the queue is empty. Settings are in `worker.env` beside it
 (`worker.env.example`). The log is `LOG_FILE`.
 
+**Stopping cleanly.** Create a file named `STOP` beside `worker.env`. The worker checks for it between batches and every
+second while idle: it finishes and reports the batch in hand, logs "stopped: asked to by the STOP file", deletes the file
+and exits. A killed worker instead loses its whole batch, which goes back in the queue after `ANALYSIS_CLAIM_MINUTES` and
+counts as one of the game's `ANALYSIS_MAX_ATTEMPTS` tries.
+
 **The Windows service.** A scheduled task `PlayMoreBlitzWorker` (XML must be saved as UTF-16 with a BOM), running as
 SYSTEM at boot, restart on failure. SYSTEM can't use the user's SSH key, so it has its own copies in
 `C:\ProgramData\pmb-worker\` (key with an ACL for SYSTEM and Administrators only, and its own `known_hosts`).
