@@ -513,6 +513,21 @@ def gateway(runner):
     return w.Gateway("user@host", "/keys/id", runner=runner, timeout=5)
 
 
+def test_on_windows_ssh_starts_without_a_console_window(monkeypatch):
+    monkeypatch.setattr(w, "NO_WINDOW", 0x08000000)  # CREATE_NO_WINDOW
+    runner = Runner('{"protocol": 1}\n')
+    gateway(runner).claim(1)
+    gateway(runner).submit([{"site": "lichess", "game_id": "x"}])
+    assert all(kwargs.get("creationflags") == 0x08000000 for _, kwargs, _ in runner.calls)
+
+
+def test_elsewhere_ssh_gets_no_window_flag(monkeypatch):
+    monkeypatch.setattr(w, "NO_WINDOW", 0)
+    runner = Runner('{"protocol": 1}\n')
+    gateway(runner).claim(1)
+    assert "creationflags" not in runner.calls[0][1]
+
+
 def test_the_ssh_command_is_a_list_with_the_request_as_its_last_argument_and_no_shell():
     runner = Runner('{"protocol": 1}\n')
     assert gateway(runner).claim(20) == {"protocol": 1}
@@ -728,7 +743,7 @@ def test_the_engine_is_opened_when_first_needed_configured_and_asked_for_nodes(m
     limit, game = fake.analysed[0]
     assert limit.nodes == 50_000 and limit.time == 30.0 and game is token
     if os.name == "nt":
-        assert opened[0][1]["creationflags"] == subprocess.BELOW_NORMAL_PRIORITY_CLASS
+        assert opened[0][1]["creationflags"] == subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW  # low priority, no window
 
 
 def test_a_nodes_override_replaces_the_configured_budget_for_one_call(monkeypatch):

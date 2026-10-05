@@ -36,6 +36,9 @@ import worker_gateway
 log = logging.getLogger("playmoreblitz.worker")
 
 PROTOCOL = worker_gateway.PROTOCOL
+# On Windows, start ssh.exe and Stockfish without a console window: under pythonw (a worker run from a scheduled task on
+# a desktop someone is using) each one would otherwise flash or hold open a window. 0 elsewhere.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 _USERNAME = re.compile(r"^[A-Za-z0-9_-]{2,30}$")
 _MONTH = re.compile(r"^[0-9]{4}-[0-9]{2}$")
 
@@ -134,6 +137,7 @@ class Gateway:
             self.command += ["-o", f"UserKnownHostsFile={known_hosts}"]
         self.command.append(target)
         self.runner, self.timeout = runner, timeout
+        self._no_window = {"creationflags": NO_WINDOW} if NO_WINDOW else {}
 
     def _call(self, request, body=None):
         with tempfile.TemporaryDirectory() as folder:
@@ -141,12 +145,14 @@ class Gateway:
             try:
                 with open(paths["out"], "wb") as out, open(paths["err"], "wb") as err:
                     if body is None:
-                        done = self.runner(self.command + [request], stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=self.timeout)
+                        done = self.runner(self.command + [request], stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=self.timeout,
+                                           **self._no_window)
                     else:
                         with open(paths["in"], "wb") as f:
                             f.write(json.dumps(body).encode("ascii"))
                         with open(paths["in"], "rb") as source:
-                            done = self.runner(self.command + [request], stdin=source, stdout=out, stderr=err, timeout=self.timeout)
+                            done = self.runner(self.command + [request], stdin=source, stdout=out, stderr=err, timeout=self.timeout,
+                                               **self._no_window)
             except (OSError, subprocess.TimeoutExpired) as why:
                 raise GatewayError(f"could not reach the bot's machine: {why}") from None
             with open(paths["out"], "rb") as f:
@@ -280,7 +286,7 @@ class Engine:
 
     def _open(self):
         import chess.engine
-        extra = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}  # the machine stays usable
+        extra = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS | NO_WINDOW} if os.name == "nt" else {}  # the machine stays usable
         self._engine = chess.engine.SimpleEngine.popen_uci(self.path, **extra)
         self._engine.configure({"Threads": self.threads, "Hash": self.hash_mb})
         self.name = str(self._engine.id.get("name") or "Stockfish")[:100]
