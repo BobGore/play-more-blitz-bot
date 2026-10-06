@@ -731,6 +731,39 @@ async def _no_data_text(month, whose=None):
             "a player's history begins in the month they register, and earlier months aren't filled in.")
 
 
+async def _before_registration(ctx, player, month):
+    """For a past month with no results held: (note, None) if the player backfilled it, so !mystats can go on and
+    say where the games came from; otherwise (None, why not), naming !backfill when the account is the asker's."""
+    history = await asyncio.to_thread(store.player_history, player.site, player.username)
+    first = history[-1]["month"] if history else None
+    if first is None or month >= first:  # not before registration: a gap the backfill can't explain
+        return None, await _no_data_text(month, (player.site, player.username))
+    held = await asyncio.to_thread(analysis_reports.month_summary, player.site, player.username, month)
+    if held.total:
+        return (f"*From before {player.username} registered ({render.month_title(first)}), via `!backfill`: "
+                "not part of the official results or 100GOB.*"), None
+    text = (f"{player.username} registered in {render.month_title(first)}, so there are no games held for "
+            f"{render.month_title(month)}.")
+    if player.added_by == ctx.author.id:
+        text += f" To add them, send me `!backfill {month}` in a direct message, then ask again."
+    return None, text
+
+
+async def _backfill_start(session, player, month, games):
+    """The rating at the start of a backfilled month, or None if the site has no rated blitz games for it.
+
+    Lichess gives the rating before each game, so it is exact. Chess.com gives only the rating after each one, so it
+    is the last rating of the month before; with no games then, the rating after the month's first game (that one
+    game's change goes uncounted). Never today's rating, which sources.start_rating falls back to for a new player.
+    """
+    if not games:
+        return None
+    if player.site == "lichess" and games[0].rating_before is not None:
+        return games[0].rating_before
+    before = await gamecache.month_games(session, player.site, player.username, sources.previous_month(month))
+    return before[-1].rating_after if before else games[0].rating_after
+
+
 async def _player_stats(ctx, username, site, command, full, month_text=None):
     """Shared by !mystats and !mystatsfull: one player's month, from their games.
 
@@ -760,21 +793,28 @@ async def _player_stats(ctx, username, site, command, full, month_text=None):
         return
 
     row = await asyncio.to_thread(store.month_row, player.site, player.username, month)
+    note = None
     if row is None:
         if month == current:
             text = f"{player.username} has no results for {render.month_title(month)} yet - try again shortly"
         else:
-            text = await _no_data_text(month, (player.site, player.username))
-        await _reject(ctx, text, refund_cooldown=True)
-        return
+            note, text = await _before_registration(ctx, player, month)
+        if note is None:
+            await _reject(ctx, text, refund_cooldown=True)
+            return
 
     async with ctx.typing():
         try:
             async with aiohttp.ClientSession() as session:
                 games = await gamecache.month_games(session, player.site, player.username, month)
+                start = row["start_rating"] if row is not None else await _backfill_start(session, player, month, games)
         except sources.SourceError as exc:
             await _reject(ctx, str(exc), refund_cooldown=True)
             return
+    if start is None:  # a backfilled month the site no longer has rated blitz games for
+        await _reject(ctx, f"{player.username} has no rated blitz games on {player.site} for {render.month_title(month)}",
+                      refund_cooldown=True)
+        return
 
     analysis_text = None
     if not full:
@@ -784,15 +824,14 @@ async def _player_stats(ctx, username, site, command, full, month_text=None):
         except Exception:
             log.exception("could not read the analysis for %s on %s", player.username, player.site)
 
-    start = row["start_rating"]
     summary = stats.summarise(games, start)
     if full:
         messages = render.render_mystatsfull(player.username, player.site, month, summary, stats.records(games), stats.splits(games, start),
-                                             so_far=month == current)
+                                             so_far=month == current, note=note)
     else:
         tables = stats.opening_tables(games)
         messages = render.render_mystats(player.username, player.site, month, summary, tables, stats.opening_verdicts(tables),
-                                         analysis_text=analysis_text, so_far=month == current)
+                                         analysis_text=analysis_text, so_far=month == current, note=note)
     for message in messages:
         await ctx.send(message)
 

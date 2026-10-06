@@ -249,13 +249,14 @@ def verdict_line(v):
     )
 
 
-def render_mystats(username, site, month, results, openings, verdicts=None, analysis_text=None, so_far=True):
+def render_mystats(username, site, month, results, openings, verdicts=None, analysis_text=None, so_far=True, note=None):
     """The default summary: the results block, then opening tables as White and Black.
 
     `verdicts` (stats.opening_verdicts) adds a best and worst opening line under each table, and `analysis_text`
-    (render_analysis.mystats_part) is put in after the results block.
+    (render_analysis.mystats_part) is put in after the results block. `note` is a line under the title, such as
+    the one saying a month comes from before the player registered.
     """
-    parts = [f"{_player_title(username, site, month, False, so_far)}\n```\n{results_block(results)}\n```"]
+    parts = [f"{_player_title(username, site, month, False, so_far)}{_note_line(note)}\n```\n{results_block(results)}\n```"]
     if analysis_text:
         parts.append(analysis_text)
     if results.games == 0:
@@ -270,6 +271,10 @@ def render_mystats(username, site, month, results, openings, verdicts=None, anal
         else:
             parts.append(f"**{title}**\nNo games.")
     return _pack(parts)
+
+
+def _note_line(note):
+    return f"\n{note}" if note else ""
 
 
 def records_block(rec):
@@ -291,9 +296,9 @@ def records_block(rec):
     )
 
 
-def render_mystatsfull(username, site, month, results, records, splits, so_far=True):
+def render_mystatsfull(username, site, month, results, records, splits, so_far=True, note=None):
     """The full summary: records, then the splits by opponent rating, colour, weekday and time of day."""
-    parts = [f"{_player_title(username, site, month, True, so_far)}\n```\n{records_block(records)}\n```"]
+    parts = [f"{_player_title(username, site, month, True, so_far)}{_note_line(note)}\n```\n{records_block(records)}\n```"]
     if results.games == 0:
         parts.append("No rated blitz games yet this month." if so_far else "No rated blitz games that month.")
         return _pack(parts)

@@ -546,14 +546,106 @@ def test_a_registered_player_whose_name_is_a_month_is_still_found_by_name(played
     assert played["calls"] == [("chess.com", "august", "2026-09")]                # the name, current month
 
 
-def test_a_month_with_no_row_for_that_player_says_when_their_history_starts_and_makes_no_site_call(played):
+def test_a_month_before_registration_with_no_backfill_points_the_owner_to_backfill_and_makes_no_site_call(played):
     two_months()
     ctx = make_ctx(ALICE)
     run(botmod.mystats, ctx, "Alice", "chess.com", "2026-06")
     assert reactions(ctx) == [NO]
-    assert said(ctx) == ["Alice has no results held for June 2026. Their history starts in August 2026, the month they registered: "
-                         "earlier months aren't filled in."]
+    assert said(ctx) == ["Alice registered in August 2026, so there are no games held for June 2026. To add them, send me "
+                         "`!backfill 2026-06` in a direct message, then ask again."]
     assert played["calls"] == []
+    ctx.command.reset_cooldown.assert_called_once_with(ctx)
+
+
+def test_someone_elses_month_before_registration_has_no_backfill_hint(played):
+    two_months()
+    ctx = make_ctx(BOB)
+    run(botmod.mystats, ctx, "Alice", "chess.com", "2026-06")
+    assert said(ctx) == ["Alice registered in August 2026, so there are no games held for June 2026."]
+    assert played["calls"] == []
+
+
+# !mystats for a month before registration that the player backfilled
+
+BACKFILL_NOTE = "*From before Alice registered (August 2026), via `!backfill`: not part of the official results or 100GOB.*"
+
+
+@pytest.fixture
+def by_month(monkeypatch):
+    """The chess site's games month by month, recording each month fetched."""
+    state = {"calls": [], "months": {}}
+
+    async def fake(session, site_name, username, month):
+        state["calls"].append(month)
+        return list(state["months"].get(month, []))
+    monkeypatch.setattr(botmod.gamecache, "month_games", fake)
+    return state
+
+
+def backfilled_june(site="chess.com"):
+    analysed(spec(1, white="Alice", site=site, month="2026-06"))
+
+
+def test_a_backfilled_chesscom_month_is_shown_with_the_note_and_starts_from_the_month_befores_last_rating(by_month):
+    two_months()
+    backfilled_june()
+    by_month["months"] = {"2026-06": [game("W", when=at(2, 10, month=6), rating_after=1410), game("L", when=at(3, 10, month=6), rating_after=1400)],
+                          "2026-05": [game("W", when=at(30, 10, month=5), rating_after=1388)]}
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "Alice", "chess.com", "2026-06")
+    text = "\n".join(said(ctx))
+    assert reactions(ctx) != [NO]
+    assert BACKFILL_NOTE in said(ctx)[0]
+    assert "Games 2" in text and "start 1388   end 1400   net +12" in text
+    assert "**Analysis** (the bot's own, by Stockfish)" in text
+    assert by_month["calls"] == ["2026-06", "2026-05"]
+
+
+def test_a_backfilled_chesscom_month_with_nothing_the_month_before_starts_from_its_first_game(by_month):
+    two_months()
+    backfilled_june()
+    by_month["months"] = {"2026-06": [game("W", when=at(2, 10, month=6), rating_after=1410), game("L", when=at(3, 10, month=6), rating_after=1400)]}
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "Alice", "chess.com", "2026-06")
+    assert "start 1410   end 1400   net -10" in "\n".join(said(ctx))
+
+
+def test_a_backfilled_lichess_month_starts_from_the_first_games_rating_before_with_no_extra_fetch(by_month):
+    add_month("lichess", "Alice", "2026-08", 1400, 1430, games=30, wins=16, draws=2, losses=12)
+    backfilled_june("lichess")
+    by_month["months"] = {"2026-06": [game("W", when=at(2, 10, month=6), rating_before=1395, rating_after=1410),
+                                      game("L", when=at(3, 10, month=6), rating_before=1410, rating_after=1400)]}
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "Alice", "lichess", "2026-06")
+    assert "start 1395   end 1400   net +5" in "\n".join(said(ctx))
+    assert by_month["calls"] == ["2026-06"]
+
+
+def test_mystatsfull_for_a_backfilled_month_carries_the_note_too(by_month):
+    two_months()
+    backfilled_june()
+    by_month["months"] = {"2026-06": [game("W", when=at(2, 10, month=6), rating_after=1410)]}
+    ctx = make_ctx(ALICE)
+    run(botmod.mystatsfull, ctx, "Alice", "chess.com", "2026-06")
+    assert BACKFILL_NOTE in said(ctx)[0]
+
+
+def test_someone_else_can_see_a_backfilled_month_with_the_note(by_month):
+    two_months()
+    backfilled_june()
+    by_month["months"] = {"2026-06": [game("W", when=at(2, 10, month=6), rating_after=1410)]}
+    ctx = make_ctx(BOB)
+    run(botmod.mystats, ctx, "Alice", "chess.com", "2026-06")
+    assert BACKFILL_NOTE in said(ctx)[0]
+
+
+def test_a_backfilled_month_the_site_no_longer_has_games_for_says_so(by_month):
+    two_months()
+    backfilled_june()
+    ctx = make_ctx(ALICE)
+    run(botmod.mystats, ctx, "Alice", "chess.com", "2026-06")
+    assert reactions(ctx) == [NO]
+    assert said(ctx) == ["Alice has no rated blitz games on chess.com for June 2026"]
     ctx.command.reset_cooldown.assert_called_once_with(ctx)
 
 
