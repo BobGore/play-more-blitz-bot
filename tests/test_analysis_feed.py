@@ -225,3 +225,50 @@ def test_with_analysis_off_a_close_queues_nothing(site, monkeypatch):
     assert close().ok
     with store.transaction() as conn:
         assert conn.execute("SELECT COUNT(*) FROM game_analysis").fetchone()[0] == 0
+
+
+# --- Chess.com's first game of a month (its rating before isn't in the site's data) ----------------------------------------
+
+def chesscom_game(n, day, rating_after, rating_before=None, colour="black"):
+    return game("W" if n % 2 else "L", when=at(day, 10), url=f"https://www.chess.com/game/live/{n}", colour=colour,
+                rating_after=rating_after, rating_before=rating_before)
+
+
+def mine(row, name="carol_example"):
+    side = "white" if row["white_username"] == name else "black"
+    return row[f"{side}_rating"], row[f"{side}_rating_change"]
+
+
+def test_the_first_chesscom_game_of_a_registered_month_takes_the_months_start_rating(site):
+    site["games"]["carol_example"] = [chesscom_game(1, 2, 1508), chesscom_game(2, 3, 1500, rating_before=1508)]
+    do_refresh(register("carol_example", "chess.com"))  # registered for the month with a start rating of 1500
+    first, second = queued()
+    assert mine(first) == (1500, 8) and mine(second) == (1508, -8)
+
+
+def test_a_backfilled_chesscom_month_takes_the_rating_after_the_last_stored_game(site):
+    register("carol_example", "chess.com")  # results start in September; June and July are a backfill
+    june = chesscom_game(10, 28, 1410, rating_before=1400)
+    july = chesscom_game(11, 5, 1425)
+    june = june.__class__(**{**june.__dict__, "ended_at": datetime(2026, 6, 28, 10, tzinfo=timezone.utc)})
+    july = july.__class__(**{**july.__dict__, "ended_at": datetime(2026, 7, 5, 10, tzinfo=timezone.utc)})
+    asyncio.run(analysis_feed.feed("chess.com", "carol_example", [june], NOW))
+    asyncio.run(analysis_feed.feed("chess.com", "carol_example", [july], NOW))
+    rows = {r["month"]: r for r in queued()}
+    assert mine(rows["2026-06"]) == (1400, 10) and mine(rows["2026-07"]) == (1410, 15)
+
+
+def test_with_nothing_to_go_on_the_rating_stays_blank(site):
+    register("carol_example", "chess.com")
+    lone = chesscom_game(20, 5, 1425)
+    lone = lone.__class__(**{**lone.__dict__, "ended_at": datetime(2026, 5, 5, 10, tzinfo=timezone.utc)})
+    asyncio.run(analysis_feed.feed("chess.com", "carol_example", [lone], NOW))
+    (row,) = queued()
+    assert mine(row) == (None, None)
+
+
+def test_lichess_games_are_left_as_the_site_gave_them(site):
+    site["games"]["alice_example"] = [lichess_game(1)]  # no rating before, as the helper builds it
+    do_refresh(register())
+    (row,) = queued()
+    assert mine(row, "alice_example") == (None, None)
