@@ -90,7 +90,8 @@ def queue_games(games, now):
 
 
 def claim(worker, limit, now, rerun_below=None):
-    """Hand `worker` up to `limit` games to analyse: normal priority before low, and newest first within each.
+    """Hand `worker` up to `limit` games to analyse: normal priority before low, and newest first within each. A game
+    whose review a member is waiting for (URGENT) is handed out on its own, since a worker reports a whole batch at once.
 
     With `rerun_below` (the current method version), once nothing else is waiting the games already analysed by an
     older method version are handed out too, newest first, to be analysed again; their old figures stay in place
@@ -112,9 +113,11 @@ def claim(worker, limit, now, rerun_below=None):
         conn.execute("UPDATE game_analysis SET status = ?, claimed_by = NULL, claimed_at = NULL WHERE status = ? AND claimed_at <= ?",
                      (PENDING, CLAIMED, expired))
         rows = conn.execute(
-            "SELECT site, game_id, month, ended_at, white_username, black_username, attempts FROM game_analysis "
+            "SELECT site, game_id, month, ended_at, white_username, black_username, attempts, priority FROM game_analysis "
             "WHERE status = ? ORDER BY priority, ended_at DESC, game_id LIMIT ?", (PENDING, max(0, limit))).fetchall()
-        if rerun_below is not None and len(rows) < limit:
+        if rows and rows[0]["priority"] == URGENT:  # a member is waiting for this one: it goes alone, so it comes back in seconds
+            rows = rows[:1]
+        elif rerun_below is not None and len(rows) < limit:
             rows += conn.execute(
                 "SELECT site, game_id, month, ended_at, white_username, black_username, attempts FROM game_analysis "
                 "WHERE status = ? AND (method_version IS NULL OR method_version < ?) ORDER BY ended_at DESC, game_id LIMIT ?",
@@ -122,7 +125,7 @@ def claim(worker, limit, now, rerun_below=None):
         for r in rows:
             conn.execute("UPDATE game_analysis SET status = ?, claimed_by = ?, claimed_at = ?, attempts = attempts + 1 "
                          "WHERE site = ? AND game_id = ?", (CLAIMED, worker, now, r["site"], r["game_id"]))
-    return [{**dict(r), "attempts": r["attempts"] + 1} for r in rows]
+    return [{**{k: r[k] for k in r.keys() if k != "priority"}, "attempts": r["attempts"] + 1} for r in rows]
 
 
 _SIDE_FIELDS = ("accuracy", "acc_opening", "acc_middle", "acc_end", "inaccuracies", "mistakes", "blunders", "acpl")
@@ -293,17 +296,24 @@ def prioritise(site, game_id):
     """Move a game to the front of the queue because a member asked for its review (!obit).
 
     A queued game jumps ahead of the rest. A game skipped only for being over the monthly limit, or one that failed,
-    is queued again: an explicit request overrides the limit. A game already claimed or done, or skipped for a reason
-    that can't change (not_standard_start, unavailable, too_short), is left as it is. Returns (status, skip_reason) as
-    they are afterwards, or None if there is no such game.
+    is queued again: an explicit request overrides the limit. A game claimed in a worker's batch is taken back and
+    queued as urgent, so it doesn't wait for the rest of that batch: the first worker's result for it is then refused
+    as no longer theirs, and at worst the game is analysed twice. A game already claimed as urgent (so on its own),
+    or done, or skipped for a reason that can't change (not_standard_start, unavailable, too_short), is left as it
+    is. Returns (status, skip_reason) as they are afterwards, or None if there is no such game.
     """
     with store.transaction() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT status, skip_reason FROM game_analysis WHERE site = ? AND game_id = ?", (site, game_id)).fetchone()
+        row = conn.execute("SELECT status, skip_reason, priority FROM game_analysis WHERE site = ? AND game_id = ?",
+                           (site, game_id)).fetchone()
         if row is None:
             return None
         state, reason = row["status"], row["skip_reason"]
-        if state == PENDING:
+        if state == CLAIMED and row["priority"] != URGENT:
+            conn.execute("UPDATE game_analysis SET status = ?, priority = ?, claimed_by = NULL, claimed_at = NULL "
+                         "WHERE site = ? AND game_id = ?", (PENDING, URGENT, site, game_id))
+            state = PENDING
+        elif state == PENDING:
             conn.execute("UPDATE game_analysis SET priority = ? WHERE site = ? AND game_id = ?", (URGENT, site, game_id))
         elif state == FAILED or (state == SKIPPED and reason == OVER_MONTHLY_LIMIT):
             conn.execute("UPDATE game_analysis SET status = ?, skip_reason = NULL, last_error = NULL, attempts = 0, priority = ?, "

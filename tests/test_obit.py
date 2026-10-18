@@ -175,11 +175,63 @@ def statuses():
         return {r["game_id"]: (r["status"], r["priority"], r["skip_reason"], r["attempts"]) for r in conn.execute("SELECT * FROM game_analysis")}
 
 
-def test_a_requested_game_is_claimed_before_the_rest():
+def result_for(game_id, plies=40):
+    """A sound analysis result for one game, as a worker would send it."""
+    w, b = side(), side()
+    return {"site": "lichess", "game_id": game_id, "method_version": analysis.METHOD_VERSION, "engine": "Stockfish 19", "nodes": 200_000,
+            "plies": plies, "middle_ply": 14, "end_ply": None, "eval_ply20": 10, "evals": analysis.pack_evals([("cp", i) for i in range(plies)]),
+            "white": w, "black": b, "moments": moments_for(w, b)}
+
+
+def test_a_requested_game_is_claimed_first_and_on_its_own():
     register("alice_example")
     q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2, 3)], NOW)                # 3 is newest, so first in the normal order
     assert q.prioritise("lichess", "00000001") == (q.PENDING, None)
-    assert [g["game_id"] for g in q.claim("desk", 3, NOW)] == ["00000001", "00000003", "00000002"]
+    assert [g["game_id"] for g in q.claim("desk", 3, NOW)] == ["00000001"]                       # alone: a batch is reported all at once
+    assert [g["game_id"] for g in q.claim("desk", 3, NOW)] == ["00000003", "00000002"]           # then batches as before
+
+
+def test_two_requested_games_go_to_two_workers_one_each():
+    register("alice_example")
+    q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2, 3)], NOW)
+    q.prioritise("lichess", "00000001")
+    q.prioritise("lichess", "00000002")
+    assert [g["game_id"] for g in q.claim("desk", 20, NOW)] == ["00000002"]
+    assert [g["game_id"] for g in q.claim("fish2", 20, NOW)] == ["00000001"]
+    assert [g["game_id"] for g in q.claim("desk", 20, NOW)] == ["00000003"]
+
+
+def test_a_claim_still_hands_out_only_what_a_worker_needs():
+    register("alice_example")
+    q.queue_games([spec(1, "alice_example", "x_example")], NOW)
+    q.prioritise("lichess", "00000001")
+    (job,) = q.claim("desk", 5, NOW)
+    assert "priority" not in job and job["attempts"] == 1
+
+
+def test_a_requested_game_already_in_a_batch_is_taken_back_and_goes_alone():
+    register("alice_example")
+    q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2, 3)], NOW)
+    assert [g["game_id"] for g in q.claim("desk", 20, NOW)] == ["00000003", "00000002", "00000001"]
+    assert q.prioritise("lichess", "00000002") == (q.PENDING, None)
+    assert statuses()["00000002"] == (q.PENDING, q.URGENT, None, 1)
+    assert [g["game_id"] for g in q.claim("fish2", 20, NOW + 5)] == ["00000002"]
+    assert q.prioritise("lichess", "00000002") == (q.CLAIMED, None)                              # already going alone: left with fish2
+    assert statuses()["00000002"] == (q.CLAIMED, q.URGENT, None, 2)
+
+
+def test_the_first_workers_late_result_for_a_taken_back_game_is_refused_and_its_release_does_nothing():
+    register("alice_example")
+    q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2)], NOW)
+    q.claim("desk", 20, NOW)
+    q.prioritise("lichess", "00000001")
+    q.claim("fish2", 20, NOW + 5)
+    ((_, _, outcome, detail),) = q.submit("desk", [result_for("00000001")], NOW + 30)
+    assert outcome == q.REJECTED and "not claimed by desk" in detail
+    assert q.release("desk", "lichess", "00000001", error="result refused") is False
+    assert statuses()["00000001"][0] == q.CLAIMED
+    ((_, _, outcome, _),) = q.submit("fish2", [result_for("00000001")], NOW + 40)
+    assert outcome != q.REJECTED and statuses()["00000001"][0] == q.DONE
 
 
 def test_prioritising_lifts_the_monthly_limit_and_retries_a_failed_game():
@@ -192,13 +244,13 @@ def test_prioritising_lifts_the_monthly_limit_and_retries_a_failed_game():
     assert statuses() == {"00000001": (q.PENDING, q.URGENT, None, 0), "00000002": (q.PENDING, q.URGENT, None, 0)}
 
 
-def test_prioritising_leaves_a_done_claimed_or_unanalysable_game_alone():
+def test_prioritising_leaves_a_done_or_unanalysable_game_alone():
     register("alice_example")
     analysed(spec(1, "alice_example", "x_example"))
     q.queue_games([spec(2, "alice_example", "y_example"), spec(3, "alice_example", "z_example")], NOW)
     q.claim("desk", 1, NOW)                                                                     # claims 3 (newest)
     before = statuses()
-    assert q.prioritise("lichess", "00000001") == (q.DONE, None) and q.prioritise("lichess", "00000003") == (q.CLAIMED, None)
+    assert q.prioritise("lichess", "00000001") == (q.DONE, None)
     assert statuses() == before
     q.release("desk", "lichess", "00000003", skip_reason=q.TOO_SHORT)
     before = statuses()
