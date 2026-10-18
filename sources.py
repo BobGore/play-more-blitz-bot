@@ -243,8 +243,12 @@ def parse_lichess_month(body, username):
             raise SourceError("lichess sent something that wasn't JSON") from None
 
         game_id = raw.get("id", "?")
-        if raw.get("variant") != "standard" or raw.get("perf") != "blitz" or not raw.get("rated"):
-            raise UnknownResult(f"lichess game {game_id} isn't rated standard blitz, which I asked for")
+        if raw.get("perf") != "blitz" or not raw.get("rated"):
+            raise UnknownResult(f"lichess game {game_id} isn't rated blitz, which I asked for")
+        # Thematic arenas start from a set position (variant "fromPosition") yet count as
+        # rated blitz, so the blitz filter lets them through. Not standard chess: skipped.
+        if raw.get("variant") != "standard":
+            continue
 
         status = raw.get("status")
         if status in LI_NOT_PLAYED or status in LI_IN_PROGRESS:

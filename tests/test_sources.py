@@ -216,10 +216,17 @@ def test_lichess_draw_with_a_winner_is_contradictory():
         parse_li(li_game(status="draw", winner="white"))
 
 
-@pytest.mark.parametrize("field,value", [("variant", "chess960"), ("perf", "rapid"), ("rated", False)])
-def test_lichess_anything_but_rated_standard_blitz_fails_loudly(field, value):
+@pytest.mark.parametrize("field,value", [("perf", "rapid"), ("rated", False)])
+def test_lichess_anything_but_rated_blitz_fails_loudly(field, value):
     with pytest.raises(sources.UnknownResult):
         parse_li(li_game(**{field: value}))
+
+
+@pytest.mark.parametrize("variant", ["fromPosition", "chess960", None])
+def test_lichess_rated_blitz_from_a_set_position_is_skipped(variant):
+    # A thematic arena game: rated blitz on Lichess, but not standard chess.
+    games = parse_li(li_game(id="theme001", variant=variant), li_game(id="real0001"))
+    assert [g.url for g in games] == ["https://lichess.org/real0001"]
 
 
 def test_lichess_missing_rating_change_fails_loudly():
