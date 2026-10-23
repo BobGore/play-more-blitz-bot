@@ -424,6 +424,43 @@ def test_a_worker_and_a_bot_that_do_not_match_refuse_to_work_together(hello, why
     assert why in str(refused.value)
     with pytest.raises(w.GatewayError):
         w.serve(Odd(), FakeHttp(), FakeEngine(), CONFIG, once=True)
+    with pytest.raises(w.GatewayRefused):   # and connect() doesn't keep trying: waiting won't fix a mismatch
+        w.connect(Odd(), sleep=lambda seconds: pytest.fail("should not wait"))
+
+
+def test_at_start_up_an_unreachable_bot_is_tried_again_waiting_longer_each_time():
+    # the power-cut case: the worker's machine is back before the network or the bot's machine is
+    class Late(Direct):
+        failures = 6
+
+        def hello(self):
+            if self.failures:
+                self.failures -= 1
+                raise w.GatewayError("hello failed (status 255): ssh: connect to host minix port 22: Connection timed out")
+            return super().hello()
+
+    naps = []
+    assert w.connect(Late(), sleep=naps.append)["protocol"] == w.PROTOCOL
+    assert naps == [30, 60, 120, 300, 300, 300]
+
+
+def test_a_gateway_that_answers_with_a_refusal_is_not_tried_again():
+    gateway = w.Gateway("u@h", "/k", runner=Runner(json.dumps({"error": "unknown worker"}), returncode=1))
+    with pytest.raises(w.GatewayRefused):
+        w.connect(gateway, sleep=lambda seconds: pytest.fail("should not wait"))
+
+
+def test_check_answers_at_once_instead_of_waiting_for_the_bot(monkeypatch, tmp_path):
+    class Down(w.Gateway):
+        def hello(self):
+            raise w.GatewayError("could not reach the bot's machine")
+
+    monkeypatch.setattr(w, "Gateway", Down)
+    monkeypatch.setattr(w, "setup_logging", lambda path="": None)
+    monkeypatch.setattr(w.time, "sleep", lambda seconds: pytest.fail("--check should not wait"))
+    path = tmp_path / "worker.env"
+    path.write_text("GATEWAY_TARGET=u@h\nGATEWAY_KEY=/k\nSTOCKFISH_PATH=/sf\n", encoding="utf-8")
+    assert w.main(["--config", str(path), "--check"]) == 1
 
 
 # --- the connection to the bot's machine --------------------------------------------------------------------------------------

@@ -117,6 +117,10 @@ class GatewayError(Exception):
     pass
 
 
+class GatewayRefused(GatewayError):
+    """The bot's machine answered and said no (or doesn't match this worker): trying again won't help."""
+
+
 class Gateway:
     """Talks to worker_gateway.py over SSH. `runner` is subprocess.run (replaced in tests).
 
@@ -158,7 +162,7 @@ class Gateway:
         except ValueError:
             payload = None
         if isinstance(payload, dict) and "error" in payload:
-            raise GatewayError(f"the gateway refused {request.split()[0]!r}: {payload['error']}")
+            raise GatewayRefused(f"the gateway refused {request.split()[0]!r}: {payload['error']}")
         if done.returncode != 0 or payload is None:
             detail = stderr.strip().splitlines()[-1:] or ["no answer"]
             raise GatewayError(f"{request.split()[0]} failed (status {done.returncode}): {detail[0][:200]}")
@@ -502,10 +506,30 @@ def run_once(gateway, http, engine, config):
 def check_gateway(gateway):
     hello = gateway.hello()
     if hello.get("protocol") != PROTOCOL:
-        raise GatewayError(f"the bot speaks protocol {hello.get('protocol')}, this worker speaks {PROTOCOL}: update one of them")
+        raise GatewayRefused(f"the bot speaks protocol {hello.get('protocol')}, this worker speaks {PROTOCOL}: update one of them")
     if hello.get("method_version") != analysis.METHOD_VERSION:
-        raise GatewayError(f"the bot expects method version {hello.get('method_version')}, this worker has {analysis.METHOD_VERSION}: update the worker")
+        raise GatewayRefused(f"the bot expects method version {hello.get('method_version')}, this worker has {analysis.METHOD_VERSION}: update the worker")
     return hello
+
+
+CONNECT_WAITS = (30, 60, 120, 300)  # seconds between start-up tries; the last one repeats
+
+
+def connect(gateway, *, sleep=time.sleep):
+    """check_gateway, trying again while the bot's machine can't be reached. After a power cut the worker's machine
+    can be up before the network or the bot's machine is; a worker started then (by a scheduled task that won't
+    restart it) would otherwise stop for good. A bot that answers and refuses is not retried."""
+    tries = 0
+    while True:
+        try:
+            return check_gateway(gateway)
+        except GatewayRefused:
+            raise
+        except GatewayError as why:
+            wait = CONNECT_WAITS[min(tries, len(CONNECT_WAITS) - 1)]
+            tries += 1
+            log.warning("%s; trying again in %d s", why, wait)
+            sleep(wait)
 
 
 def serve(gateway, http, engine, config, *, once=False, sleep=time.sleep, stop=lambda: False):
@@ -555,7 +579,7 @@ def main(argv=None):
     http = Http(config.contact, config.request_timeout, config.lichess_interval)
     engine = Engine(config.stockfish_path, config.engine_threads, config.engine_hash_mb, config.nodes, config.position_seconds)
     try:
-        hello = check_gateway(gateway)
+        hello = check_gateway(gateway) if args.check else connect(gateway)
         log.info("connected to the bot's machine (protocol %s, method version %s)", hello["protocol"], hello["method_version"])
         if args.check:
             import chess
