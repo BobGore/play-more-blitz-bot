@@ -813,7 +813,7 @@ def test_mystatsfull_does_not_carry_the_analysis_part(played):
 def test_the_help_lists_lastgame_as_dm_only_after_the_history_commands():
     ctx = make_ctx(ALICE)
     run(botmod.help_blitz_bot, ctx)
-    text = said(ctx)[0]
+    text = "".join(said(ctx))
     line = next(l for l in text.split("\n") if l.startswith("`!lastgame [username]`"))
     assert line.endswith(". Direct message only")
     assert text.index("`!history [username]`") < text.index("`!myhistory [site]`") < text.index("`!lastgame [username]`")

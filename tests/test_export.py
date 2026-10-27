@@ -688,8 +688,8 @@ def test_slash_export_is_registered_for_servers_with_optional_period_and_a_choic
 def test_help_and_readme_describe_export():
     ctx = make_ctx(dm=False)
     asyncio.run(botmod.help_blitz_bot.callback(ctx))
-    text = said(ctx)[0]
-    assert "`/export [period] [what]`" in text and "Or `!export` by DM" in text and len(text) < 2000
+    text = "".join(said(ctx))
+    assert "`/export [period] [what]`" in text and "Or `!export` by DM" in text and all(len(m) < 2000 for m in botmod.help_messages())
     readme = open(botmod.__file__.replace("bot.py", "README.md"), encoding="utf-8").read()
     assert "`!export [summary] [period] [site]`" in readme and "`/export [period] [what]`" in readme
     assert botmod.USAGE["export"] == "!export [summary] [period] [site]"

@@ -702,7 +702,7 @@ def test_the_analysis_part_of_a_past_month_is_that_months(played):
 def test_the_help_explains_that_registration_counts_only_this_month_and_lists_the_history_commands():
     ctx = make_ctx(ALICE)
     run(botmod.help_blitz_bot, ctx)
-    text = said(ctx)[0]
+    text = "".join(said(ctx))
     assert "It counts this month's games so far; earlier months aren't counted" in text
     assert "`!results [month]`" in text and "`!history [username]`" in text and "`!mystats [username] [month]`" in text
-    assert len(text) < 2000
+    assert all(len(m) < 2000 for m in botmod.help_messages())

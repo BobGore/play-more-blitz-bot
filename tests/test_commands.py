@@ -713,8 +713,8 @@ def test_slash_100gob_commands_are_registered_with_their_descriptions():
 def test_the_help_lists_the_slash_100gob_forms_and_still_fits_in_one_message():
     ctx = make_ctx(ALICE)
     run(botmod.help_blitz_bot, ctx)
-    text = said(ctx)[0]
-    assert "Or `/100gob`" in text and "Or `/100gobnext`" in text and len(text) <= 2000
+    text = "".join(said(ctx))
+    assert "Or `/100gob`" in text and "Or `/100gobnext`" in text and all(len(m) < 2000 for m in botmod.help_messages())
 
 
 def test_results_lists_who_has_signed_up_for_next_month():
@@ -1085,10 +1085,10 @@ def test_both_commands_carry_the_cooldown_and_the_error_handler_knows_their_usag
 def test_the_help_message_lists_every_command_and_fits_in_one_discord_message():
     ctx = make_ctx(ALICE)
     run(botmod.help_blitz_bot, ctx)
-    text = said(ctx)[0]
+    text = "".join(said(ctx))
     for name in ("!add", "!remove", "!results", "!100gob", "!100gobnext", "!mystats", "!mystatsfull"):
         assert name in text
-    assert len(text) < 2000
+    assert all(len(m) < 2000 for m in botmod.help_messages())
 
 
 # --- !results --------------------------------------------------------------
@@ -1168,3 +1168,13 @@ def test_commands_from_outside_the_allowed_channels_are_ignored_silently():
     assert asyncio.run(botmod._in_allowed_channel(ctx)) is False
     ctx = SimpleNamespace(channel=SimpleNamespace(id=min(botmod.ALLOWED_CHANNEL_IDS)))
     assert asyncio.run(botmod._in_allowed_channel(ctx)) is True
+
+
+def test_the_help_is_two_messages_channel_commands_then_private_ones():
+    ctx = make_ctx(ALICE)
+    run(botmod.help_blitz_bot, ctx)
+    channel, private = said(ctx)
+    assert channel == botmod.help_messages()[0] and private.startswith("**Private commands**")
+    assert "`!results [month]`" in channel and "`!history [username]`" not in channel
+    assert "`!history [username]`" in private and "`!clear`" in private and "`!add" not in private
+    assert all(len(m) < 2000 for m in (channel, private))

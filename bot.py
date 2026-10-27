@@ -456,9 +456,10 @@ async def _reject(ctx, reason, *, refund_cooldown=False):
         ctx.command.reset_cooldown(ctx)
 
 
-@bot.command(name="helpblitzbot")
-async def help_blitz_bot(ctx):
-    await ctx.send(
+def help_messages():
+    """The help, as two messages (each must stay under Discord's 2,000 characters): the commands for the channel, then
+    the private ones, which work in a direct message to the bot."""
+    return [
         "**PlayMoreBlitz bot** - counts each member's rated blitz games this month.\n"
         f"`{USAGE['add']}` - register your own account, one per site. "
         "It counts this month's games so far; earlier months aren't counted\n"
@@ -468,7 +469,8 @@ async def help_blitz_bot(ctx):
         f"`!100gob [username]` - join this month's challenge: {GOB_TARGET} games of blitz. Or `/100gob`\n"
         "`!100gobnext [username]` - sign up for next month's challenge. Or `/100gobnext`\n"
         "`!mystats [username] [month]` - one player's results and openings this month, or another month (yours if no name). Also by DM\n"
-        "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time. Also by DM\n"
+        "`!mystatsfull [username] [month]` - their records and splits by opponent, colour, day and time. Also by DM\n",
+        "**Private commands** - in a direct message to the bot; only you see the replies.\n"
         "`!history [username]` - a player's months one line each: games, record, rating, accuracy, 100GOB. Direct message only\n"
         "`!myhistory [site]` - your own months from what's been analysed - can include a month `!backfill` added that "
         "`!history` can't see. Direct message only\n"
@@ -477,11 +479,18 @@ async def help_blitz_bot(ctx):
         "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Or `!obit` by DM. "
         "Registered members on the server only\n"
         "`/export [period] [what]` - your own games as a CSV file for a spreadsheet, one file per account, sent by DM; period is "
-        "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or `!export` by DM\n"
+        "this month, last, week, a month like 2026-08 or all, and `what` can be games or summary. Or `!export` by DM, which "
+        "also takes a site (`chess.com` or `lichess`) for one account only\n"
         "`/backfill <month>` - fetch one of your own past months (before registering, or one missed) for analysis: `2025-11` "
         "or `november`. Or `!backfill` by DM\n"
-        "`!clear` - DM me to delete everything I've sent you there, old messages included\n"
-    )
+        "`!clear` - DM me to delete everything I've sent you there, old messages included\n",
+    ]
+
+
+@bot.command(name="helpblitzbot")
+async def help_blitz_bot(ctx):
+    for text in help_messages():
+        await ctx.send(text)
 
 
 def _one_per_site_message(site, existing=None):

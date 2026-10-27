@@ -932,8 +932,8 @@ def test_the_command_has_a_usage_line_no_cooldown_of_its_own_and_help_mentions_b
     assert botmod.obit_command._buckets._cooldown is None                                   # the throttle on looking at the sites replaces it
     ctx = make_ctx(ALICE)
     asyncio.run(botmod.help_blitz_bot.callback(ctx))
-    text = said(ctx)[0]
-    assert "`/obit [game link or id]`" in text and "Or `!obit` by DM" in text and "Registered members on the server only" in text and len(text) < 2000
+    text = "".join(said(ctx))
+    assert "`/obit [game link or id]`" in text and "Or `!obit` by DM" in text and "Registered members on the server only" in text and all(len(m) < 2000 for m in botmod.help_messages())
 
 
 def statuses():

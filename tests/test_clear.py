@@ -204,7 +204,7 @@ def test_it_may_be_sent_in_a_dm_and_in_the_allowed_channel_only():
 def test_help_and_readme_describe_it_and_the_help_still_fits_in_a_message():
     ctx = SimpleNamespace(send=AsyncMock())
     run(botmod.help_blitz_bot.callback(ctx))
-    text = ctx.send.await_args.args[0]
-    assert "`!clear`" in text and "DM me" in text and len(text) < 2000
+    text = "".join(c.args[0] for c in ctx.send.await_args_list)
+    assert "`!clear`" in text and "DM me" in text and all(len(m) < 2000 for m in botmod.help_messages())
     readme = open(botmod.__file__.replace("bot.py", "README.md"), encoding="utf-8").read()
     assert any(line.startswith("| `!clear` | Anyone on the server, in a direct message to the bot |") for line in readme.splitlines())

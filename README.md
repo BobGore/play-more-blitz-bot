@@ -41,7 +41,7 @@ see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).**
 | `!clear` | Anyone on the server, in a direct message to the bot | Deletes the messages the bot has sent you in that conversation, old ones included (Discord doesn't let you delete a bot's messages in a DM yourself, but the bot can delete its own). Only the bot's messages go, the most recent 1000 in one go: run it again if some are left. Everything the bot says in a DM also carries a 🗑️ Delete button. |
 | `!say <message>` | Admins only, in a direct message to the bot | Posts the message in the bot's channel (`POST_CHANNEL_ID`) as the bot, word for word, e.g. a congratulation after the final table. Up to 2000 characters. It can name a member but never pings @everyone, @here or a role. The bot replies with a link to the post. |
 | `!closemonth` | Admins only, in a direct message to the bot | Closes any finished month that is still open and posts its final table. Silent for everyone else. |
-| `!helpblitzbot` | Anyone | The command list. |
+| `!helpblitzbot` | Anyone | The command list, in two messages: the channel commands, then the private ones that work in a direct message to the bot. |
 
 **House rule: register your own account, one per site.** The bot can't check that an account belongs to whoever
 registers it, so it works on trust and helps keep the rule: a member can have one active account on Chess.com and one
