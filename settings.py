@@ -150,6 +150,15 @@ if ANALYSIS_FULL_PRIORITY_GAMES > ANALYSIS_MAX_GAMES:
 ANALYSIS_CLAIM_MINUTES = whole_number("ANALYSIS_CLAIM_MINUTES", 30)  # a claimed game not finished by then goes back in the queue
 ANALYSIS_MAX_ATTEMPTS = whole_number("ANALYSIS_MAX_ATTEMPTS", 5)  # tries before a game is marked failed
 
+# --- The blunder map (!blundermap) -------------------------------------------------------------------
+
+# The good-move counts the blunder map is drawn from (blundermap.db, filled by the counting machines, outside the bot; the
+# bot only reads it). Empty means !blundermap is off. BLUNDERMAP_USERS are the members who may use it while it is being
+# tried out (admins always may); BLUNDERMAP_EVERYONE opens it to every member.
+BLUNDERMAP_DB = text("BLUNDERMAP_DB")
+BLUNDERMAP_USERS = discord_ids("BLUNDERMAP_USERS", set())
+BLUNDERMAP_EVERYONE = flag("BLUNDERMAP_EVERYONE", False)
+
 # --- What the summaries show -----------------------------------------------------------------------
 
 MIN_OPENING_GAMES = whole_number("MIN_OPENING_GAMES", 2)  # fewer games than this and an opening goes into "All others"
@@ -187,4 +196,5 @@ NAMES = (
     "REQUEST_TIMEOUT_SECONDS", "MONTH_TIMEOUT_SECONDS", "MONTH_STALL_SECONDS", "LICHESS_EXPORT_MIN_INTERVAL",
     "PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT", "BACKUP_DIR", "BACKUP_KEEP_DAYS",
     "ANALYSIS_ENABLED", "ANALYSIS_FULL_PRIORITY_GAMES", "ANALYSIS_MAX_GAMES", "ANALYSIS_CLAIM_MINUTES", "ANALYSIS_MAX_ATTEMPTS",
+    "BLUNDERMAP_DB", "BLUNDERMAP_USERS", "BLUNDERMAP_EVERYONE",
 )

@@ -84,12 +84,13 @@ the bot was invited without the `applications.commands` scope: re-authorise it (
 discord.py does, so that cannot go unnoticed again):
 
 - In a server: only in `ALLOWED_CHANNEL_IDS`, and never the system commands.
-- In a DM to the bot: `!obit`, `!export` and `!backfill` (for anyone who is on the server and registered to an account),
+- In a DM to the bot: `!obit`, `!blundermap`, `!export` and `!backfill` (for anyone who is on the server and registered to an account;
+  `!blundermap` only for `BLUNDERMAP_USERS` until `BLUNDERMAP_EVERYONE` is on),
   `!history` and `!lastgame` (for anyone who is on the server; the account named, or their own, need not be theirs), `!myhistory` (for
   anyone who is on the server and registered, their own accounts only), `!mystats` and `!mystatsfull` (for anyone who is
   on the server; they work in the channel too), `!clear` (deletes
   the bot's own messages in that DM, old ones included: Discord only lets a bot delete its own messages there), and the
-  admin system commands `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor`, `!say <message>` (admins only). Nothing else.
+  admin system commands `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor`, `!blundermapfor`, `!say <message>` (admins only). Nothing else.
 - Slash commands check the channel themselves.
 
 **Ownership.** `players.added_by` is the Discord ID of the member the account belongs to. "My account" in `!mystats`,
@@ -453,6 +454,18 @@ for the period (this month, last, week, a month, all), oldest first, analysed or
 UTF-8 with a BOM (Excel), CRLF, text cells beginning with `= + - @` are defused against spreadsheet formulas. One export
 per person per 30 s. Nothing is stored: files are made on request.
 
+**`!blundermap [month]`** — `blundermap_build.py` + `blundermap.py` + `blundermap_template.html`: the member's monthly
+blunder map, one self-contained HTML page per account (opened in a browser; up to about 2 MB for a very busy month): where
+their blunders happen by clock left and number of good moves, compared in plain words with their own opponents, plus a
+flashcard for each blunder. The good-move counts come from `blundermap.db` (`BLUNDERMAP_DB`), which the bot only reads: it is
+filled outside the bot by counting machines that take analysed games from a counting queue on the bot's server and send the
+counts back (not part of this repository). Games analysed but not counted yet are left off and the message says how many.
+`blundermap.py` runs as a separate process at the lowest priority (a busy month takes a minute or two), one build at a time
+across the bot; the command replies with ⏳ at once and the file follows by DM. One build in hand per person, and each month's
+map at most once an hour for a member (the counts change about hourly); admins are exempt from the hour. While it is tried
+out only `BLUNDERMAP_USERS` (and admins) may use it. `!blundermapfor <username> [month] [site]` (admin, DM) is the read-only
+admin version: any registered player's map, sent to the admin, the member not told. Nothing is stored: pages are made on request.
+
 **`!backfill <month>` / `/backfill <month>`** — the same fetch-and-queue `analysis_feed.feed` does for a freshly finished
 game, but for one person's own accounts and a month they name (not the current month, which the refresher already keeps
 up with): games from before they registered, or a month analysis missed. One call to the person's site per account, so
@@ -482,8 +495,8 @@ Counts only, 35 days.
 
 | | In the server channel | In a DM to the bot | Slash |
 | --- | --- | --- | --- |
-| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame`, `!mystats`, `!mystatsfull` (anyone on the server; the last two also in the channel) | `/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext` |
-| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor`, `!say <message>` | |
+| Anyone | `!add` (own account, one per site), `!remove` (own), `!results`, `!mystats`, `!mystatsfull`, `!100gob`, `!100gobnext`, `!helpblitzbot` | `!obit`, `!blundermap` (testers first), `!export`, `!backfill`, `!myhistory` (registered members who are on the server); `!history`, `!lastgame`, `!mystats`, `!mystatsfull` (anyone on the server; the last two also in the channel) | `/obit`, `/export`, `/backfill`, `/100gob`, `/100gobnext` |
+| Admins (`ADMIN_USER_IDS`) | as above, plus `!add` for others (naming the member), `!remove` anyone; exempt from cooldowns | `!analysisq`, `!queuemonth [month]`, `!backfillfor <username> <month> [site]`, `!closemonth`, `!setowner`, `!usage`, `!gamestate`, `!obitfor`, `!blundermapfor`, `!say <message>` | |
 | Everyone else in a channel that isn't allowed | ignored | ignored | refused privately |
 
 ## 11. Watching over it
@@ -604,6 +617,7 @@ Find one person's whole story with `journalctl -u playmoreblitz --since "-1day" 
 | `analysis_reports.py`, `render_analysis.py` | Reading the analysis for display |
 | `obit.py`, `render_obit.py`, `clock_review.py` | Reviews: reading a game reference, own games, requests; the review text; the clock checks (how the time was spent) |
 | `export_data.py` | CSV exports |
+| `blundermap_build.py`, `blundermap.py`, `blundermap_template.html` | The blunder map: building it in a separate process; the page's data and words; the page |
 | `monitoring.py`, `usage.py` | Alerts logic and counts of use |
 | `singleton.py` | The lock (`playmoreblitz.lock` beside the code) that stops a second copy of the bot starting from the same folder |
 | `backup.py`, `playmoreblitz*.service/.timer` | Nightly backup and the systemd units |

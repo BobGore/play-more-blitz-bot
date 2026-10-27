@@ -25,6 +25,7 @@ import analysis_feed
 import analysis_queue
 import analysis_reports
 import announce
+import blundermap_build
 import export_data
 import gamecache
 import monitoring
@@ -85,6 +86,8 @@ USAGE = {
     "backfillfor": "!backfillfor <username> <month> [site]",
     "gamestate": "!gamestate <game link or id>",
     "obitfor": "!obitfor <game link or id> [username]",
+    "blundermap": "!blundermap [month]",
+    "blundermapfor": "!blundermapfor <username> [month] [site]",
 }
 
 intents = discord.Intents.default()
@@ -392,8 +395,8 @@ async def on_ready():
             log.exception("catch-up posts crashed")
 
 
-DM_COMMANDS = ("obit", "export", "clear", "backfill", "history", "myhistory", "lastgame", "mystats", "mystatsfull")  # the commands members can send the bot in a direct message (mystats and mystatsfull also work in the channel)
-ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate", "obitfor", "say")  # system-type commands: an admin's, and only in a direct message
+DM_COMMANDS = ("obit", "blundermap", "export", "clear", "backfill", "history", "myhistory", "lastgame", "mystats", "mystatsfull")  # the commands members can send the bot in a direct message (mystats and mystatsfull also work in the channel)
+ADMIN_DM_COMMANDS = ("analysisq", "queuemonth", "backfillfor", "closemonth", "setowner", "usage", "gamestate", "obitfor", "blundermapfor", "say")  # system-type commands: an admin's, and only in a direct message
 ADMIN_HINT = "Admin commands work only in a direct message to me: send it there."
 
 
@@ -1466,6 +1469,137 @@ async def export_slash(interaction: discord.Interaction, period: Optional[str] =
     files = sum(1 for p in parts if "data" in p)
     await interaction.followup.send(f"I've sent you {files} file{'s' if files != 1 else ''} by DM." if files else "There were no games to send.",
                                     ephemeral=True)
+
+
+BLUNDERMAP_HINT = "Send me `!blundermap` in a direct message: your blunder map is private, so I don't do it in the channel."
+BLUNDERMAP_GAP_SECONDS = 3600  # one member, one month: the counts behind the map only change about hourly
+_blundermaps = {}  # (user id, site, username, month) -> when that map was last made for them (monotonic seconds)
+_blundermaps_building = set()  # user ids with a build in hand: one at a time each
+_blundermap_tasks = set()  # running jobs, kept so they aren't garbage-collected mid-build
+
+
+def _may_use_blundermap(user_id):
+    return settings.BLUNDERMAP_EVERYONE or _is_admin(user_id) or user_id in settings.BLUNDERMAP_USERS
+
+
+async def _blundermap_parts(user_id, accounts, month, *, whose=None):
+    """Build the map of `month` for each account in `accounts` with analysed games, one after another, and DM them to
+    `user_id`: one message per account, the file with a line saying how much of the month is on it. `whose` is set for an
+    admin's !blundermapfor, which is read-only and tells the member nothing. Runs as a task after the command has replied."""
+    title = render.month_title(month)
+    parts = []
+    for account in accounts:
+        label = f"`{account.username}` · {render.SITE_NAMES.get(account.site, account.site)}"
+        _, analysed_games = await asyncio.to_thread(blundermap_build.games_held, account.site, account.username, month)
+        if not analysed_games:
+            parts.append({"text": f"{label}: no analysed games held for {title}, so there's no map."})
+            continue
+        try:
+            page, summary = await blundermap_build.build(account.site, account.username, month)
+        except blundermap_build.BuildError as why:
+            log.warning("couldn't build the blunder map of %s/%s %s: %s", account.site, account.username, month, why)
+            parts.append({"text": f"{label}: I couldn't make the map for {title} just now. Try again later."})
+            continue
+        if len(page) > blundermap_build.MAX_FILE_BYTES:
+            parts.append({"text": f"{label}: the map for {title} is too big to send."})
+            continue
+        text = f"{label} · {blundermap_build.describe(summary, title, whose)} Open the file in a browser."
+        parts.append({"text": text, "filename": blundermap_build.file_name(account.site, account.username, month), "data": page})
+    try:
+        await _dm_parts(user_id, parts)
+    except discord.Forbidden:
+        log.warning("couldn't send a blunder map to %s: they don't accept DMs from the bot", user_id)
+    except discord.HTTPException as exc:
+        log.warning("couldn't send a blunder map to %s (%s)", user_id, exc.status)
+    log.info("blunder map %s for %s: %d file(s)", month, user_id, sum(1 for p in parts if "data" in p))
+
+
+async def _blundermap_start(ctx, accounts, month, *, whose=None):
+    """Say the map is on its way, then build and send it in the background (one build in hand per person)."""
+    user_id = ctx.author.id
+    _blundermaps_building.add(user_id)
+    for account in accounts:
+        _blundermaps[(user_id, account.site, account.username, month)] = _monotonic()
+
+    async def job():
+        try:
+            await _blundermap_parts(user_id, accounts, month, whose=whose)
+        except Exception:
+            log.exception("the blunder map job for %s failed", user_id)
+        finally:
+            _blundermaps_building.discard(user_id)
+
+    await _react(ctx, "⏳")
+    title = render.month_title(month)
+    try:
+        await ctx.send(f"Making your blunder map for {title}: a busy month takes a minute or two. I'll send it here."
+                       if whose is None else f"Making {whose}'s blunder map for {title}: I'll send it here.")
+    except discord.HTTPException as exc:
+        log.warning("couldn't answer a direct message (%s)", exc.status)
+    _blundermap_tasks.add(task := asyncio.create_task(job()))
+    task.add_done_callback(_blundermap_tasks.discard)
+
+
+@bot.command(name="blundermap")
+async def blundermap_command(ctx, month: Optional[str] = None):
+    """Your blunder map for a month (this month by default): a page to open in a browser showing where your blunders happen
+    (how much time you had, how many good moves there were) compared with your opponents, with a flashcard for each
+    blunder. One file per account, sent in this conversation. Direct messages only, for registered members who are on the
+    server; while it is being tried out only for BLUNDERMAP_USERS. Each month's map is made at most once an hour for a member."""
+    if not _in_dm(ctx):
+        try:
+            await ctx.send(BLUNDERMAP_HINT, delete_after=TEXT_STAYS_SECONDS)
+        except discord.HTTPException as exc:
+            log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
+        return
+    if not settings.BLUNDERMAP_DB:
+        await _reject(ctx, "the blunder map isn't switched on yet")
+        return
+    if not _may_use_blundermap(ctx.author.id):
+        await _reject(ctx, "the blunder map is being tried out by a few members first: it will open to everyone soon")
+        return
+    status = await _member_status(ctx.author.id)
+    if status is not True:
+        await _reject(ctx, _not_a_member_text(status))
+        return
+    accounts = await asyncio.to_thread(store.accounts_of, ctx.author.id)
+    if not accounts:
+        await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` in the server's channel first")
+        return
+    chosen = await _month_or_reject(ctx, month, sources.current_month())
+    if chosen is None:
+        return
+    if ctx.author.id in _blundermaps_building:
+        await _reject(ctx, "I'm still making your last one: it will be here soon")
+        return
+    if not _is_admin(ctx.author.id):
+        last = max(_blundermaps.get((ctx.author.id, a.site, a.username, chosen), float("-inf")) for a in accounts)
+        wait = BLUNDERMAP_GAP_SECONDS - (_monotonic() - last)
+        if wait > 0:
+            await _reject(ctx, f"I made your {render.month_title(chosen)} map less than an hour ago, and it only changes about "
+                               f"hourly: try again in {max(1, round(wait / 60))} minutes")
+            return
+    await _blundermap_start(ctx, accounts, chosen)
+
+
+@bot.command(name="blundermapfor")
+@commands.check(_admin_only)
+async def blundermapfor(ctx, username: str, month: Optional[str] = None, site: Optional[str] = None):
+    """Admins only, in a direct message: any registered player's blunder map for a month, sent to the admin - for example
+    to look at a member's map before they ask. Read-only, and the member isn't told."""
+    if not settings.BLUNDERMAP_DB:
+        await _reject(ctx, "the blunder map is switched off (`BLUNDERMAP_DB`)")
+        return
+    player = await _pick_player(ctx, username, site, "blundermapfor")
+    if player is None:
+        return
+    chosen = await _month_or_reject(ctx, month, sources.current_month())
+    if chosen is None:
+        return
+    if ctx.author.id in _blundermaps_building:
+        await _reject(ctx, "I'm still making the last one: it will be here soon")
+        return
+    await _blundermap_start(ctx, [player], chosen, whose=player.username)
 
 
 BACKFILL_HINT = "Use `/backfill`, or send me `!backfill <month>` in a direct message: it only works there."

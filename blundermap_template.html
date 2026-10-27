@@ -1,0 +1,791 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Blunder map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one column; title and overall line, the map as the hero, quadrant cards, flashcard, phase table, clock bars, notes. */
+:root {
+  --bg: #f7f8f6; --surface: #ffffff; --fg: #15181a; --fg-2: #4b5157; --fg-3: #7b8288; --ink-rgb: 21, 24, 26;
+  --grid: #e3e6e3; --mid: #f0efec; --better: #2a78d6; --worse: #e34948; --you: #15181a; --opp: #9aa1a6; --unclear: #d5d8d5;
+  --ph-open: #2a78d6; --ph-mid: #eb6834; --ph-end: #1baf7a;
+  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121414; --surface: #1a1c1c; --fg: #eef0ee; --fg-2: #b9bfbd; --fg-3: #8a908e; --ink-rgb: 238, 240, 238;
+  --grid: #2c302f; --mid: #383835; --better: #3987e5; --worse: #e66767; --you: #eef0ee; --opp: #6b7270; --unclear: #3a3e3d;
+  --ph-open: #3987e5; --ph-mid: #d95926; --ph-end: #199e70; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121414; --surface: #1a1c1c; --fg: #eef0ee; --fg-2: #b9bfbd; --fg-3: #8a908e; --ink-rgb: 238, 240, 238;
+  --grid: #2c302f; --mid: #383835; --better: #3987e5; --worse: #e66767; --you: #eef0ee; --opp: #6b7270; --unclear: #3a3e3d;
+  --ph-open: #3987e5; --ph-mid: #d95926; --ph-end: #199e70; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 40px }
+main { max-width: 900px; margin: 0 auto; display: grid; gap: 20px }
+h1 { font-size: 1.7rem; line-height: 1.2; margin: 0; text-wrap: balance; letter-spacing: -0.01em }
+.eyebrow { font-family: var(--font-data); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); margin: 0 0 6px }
+.lede { margin: 8px 0 0; color: var(--fg-2); max-width: 65ch }
+.panel { background: var(--surface); border: 1px solid var(--grid); border-radius: 6px; padding: 14px; position: relative; min-width: 0 }
+.chart-wrap { overflow-x: auto }
+svg { display: block; width: 100%; height: auto; min-width: 560px }
+svg text { font-family: var(--font-data); fill: var(--fg-2); font-size: 11px }
+svg .axis-title { font-family: var(--font-body); font-size: 12px; font-weight: 600; fill: var(--fg) }
+svg .qlabel { font-family: var(--font-body); font-size: 12px; font-weight: 700; fill: var(--fg); pointer-events: none }
+svg .qsub { font-size: 10.5px; fill: var(--fg-2); pointer-events: none }
+svg .ratio { font-size: 15px; font-weight: 600; fill: var(--fg) }
+svg .counts { font-size: 9.5px; fill: var(--fg-2) }
+svg .few { font-size: 10px; fill: var(--fg-3) }
+.mark { stroke: var(--surface); stroke-width: 1.5; cursor: pointer }
+.mark.open { fill: var(--ph-open) } .mark.middle { fill: var(--ph-mid) } .mark.end { fill: var(--ph-end) }
+.dot { outline: none }
+.dot:focus-visible .mark, .mark:hover, .dot.current .mark { stroke: var(--fg); stroke-width: 2.5 }
+.board { display: block; width: 100%; height: auto; min-width: 0; border-radius: 3px }
+.board .coord { font-family: var(--font-data); font-size: 21px; font-weight: 600; stroke: none }
+.tip .board { width: 176px; margin-top: 6px }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: .86rem; color: var(--fg); margin-bottom: 8px }
+.switch input { width: 16px; height: 16px; accent-color: var(--fg); margin: 0 }
+.card { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 18px; align-items: start }
+.card h2 { font-size: 1.15rem; margin: 0 0 6px }
+.card .facts { margin: 0 0 12px; color: var(--fg-2); font-size: .9rem; font-family: var(--font-data) }
+.card .answer { margin: 0 0 12px; font-size: .92rem; max-width: 46ch }
+.card .answer i { display: inline-block; width: 18px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 4px }
+.card .impact { display: block; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--grid) }
+.card .record { margin: 12px 0 0; font-size: .8rem; color: var(--fg-3) }
+.card .record a { color: inherit }
+.card .btns { display: flex; flex-wrap: wrap; gap: 8px }
+.card .btns > * { font: inherit; font-size: .88rem; font-weight: 600; border: 1px solid var(--grid); background: var(--surface); color: var(--fg); border-radius: 4px; padding: 7px 12px; cursor: pointer; text-decoration: none }
+.card .btns button:disabled { opacity: .4; cursor: default }
+.card .btns .primary { background: var(--fg); color: var(--bg); border-color: var(--fg) }
+.card .btns > *:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px }
+@media (max-width: 620px) { .card { grid-template-columns: minmax(0, 1fr) } }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font-size: .82rem; color: var(--fg-2); margin-top: 10px }
+.legend button { font: inherit; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--grid); background: var(--surface); color: var(--fg); border-radius: 999px; padding: 3px 10px; cursor: pointer }
+.legend button[aria-pressed="false"] { opacity: .45; text-decoration: line-through }
+.legend button:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px }
+.legend svg { min-width: 0; width: 12px; height: 12px; display: inline }
+.scale { display: inline-flex; gap: 2px; vertical-align: middle; margin: 0 6px }
+.scale span { width: 22px; height: 12px; border-radius: 2px; position: relative; overflow: hidden; background: var(--mid) }
+.scale span i { position: absolute; inset: 0 }
+.lab { font-family: var(--font-data); font-size: .74rem }
+.key { display: inline-block; width: 14px; height: 8px; border-radius: 2px; vertical-align: middle; margin-right: 6px }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font-size: .8rem; line-height: 1.45;
+  padding: 8px 10px; border-radius: 4px; max-width: 250px; font-family: var(--font-data); z-index: 2; box-shadow: 0 4px 14px rgba(0,0,0,.18) }
+.tip b { font-family: var(--font-body) }
+.table-wrap { overflow-x: auto }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; font-variant-numeric: tabular-nums }
+th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap }
+th:first-child, td:first-child { text-align: left }
+th { font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); font-weight: 600 }
+td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: middle }
+.quads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; background: var(--grid); border-radius: 6px; overflow: hidden }
+.quad { background: var(--surface); padding: 14px; display: grid; gap: 4px; align-content: start }
+.quad h3 { margin: 0; font-size: .95rem }
+.quad .num { font-family: var(--font-data); font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums }
+.quad .num small { font-size: .8rem; color: var(--fg-2); font-weight: 400 }
+.quad p { margin: 0; color: var(--fg-2); font-size: .86rem }
+.finding { border-left: 3px solid var(--fg); padding: 2px 0 2px 12px; max-width: 70ch }
+.finding p { margin: 0 }
+.notes { color: var(--fg-2); font-size: .86rem; max-width: 70ch }
+.notes p { margin: 8px 0 0 }
+.notes summary { cursor: pointer; font-weight: 600; color: var(--fg); list-style-position: outside; margin-left: 1.1em }
+.area { min-width: 0 }
+.area > summary { cursor: pointer; font-weight: 600; color: var(--fg); list-style-position: outside; margin: 0 0 8px 1.1em }
+.area > summary:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px }
+.notes summary:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px }
+@media (max-width: 520px) { h1 { font-size: 1.35rem } .quad .num { font-size: 1.25rem } }
+[hidden] { display: none !important }
+.layer { position: fixed; inset: 0; z-index: 20 }
+.layer-back { position: absolute; inset: 0; background: rgba(0, 0, 0, .4) }
+.layer-panel { position: absolute; top: 0; right: 0; bottom: 0; box-sizing: border-box; width: min(580px, 100%); overflow-y: auto; background: var(--bg); padding: 0 16px 24px; box-shadow: -6px 0 24px rgba(0, 0, 0, .25) }
+.layer-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; background: var(--bg); padding: 14px 0 10px; border-bottom: 1px solid var(--grid); margin-bottom: 10px }
+.layer-head h2 { margin: 0; font-size: 1.15rem }
+.layer-head button { font: inherit; font-size: 1rem; border: 1px solid var(--grid); background: var(--surface); color: var(--fg); border-radius: 4px; width: 34px; height: 34px; cursor: pointer }
+body.layer-open { overflow: hidden }
+.cards-sum { font-family: var(--font-data); font-size: .85rem; color: var(--fg-2); margin: 0 0 10px }
+.cards-sum b { color: var(--fg) }
+tr.grp th { padding-top: 16px; color: var(--fg-2) }
+tr.grp th span { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--fg-3) }
+#cards-split { margin-bottom: 12px; font-size: .82rem }
+#cards-split th, #cards-split td { padding: 5px 8px }
+.filters { display: grid; gap: 8px; margin-bottom: 10px }
+.filters .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .82rem; color: var(--fg-2) }
+.filters .row > span:first-child { width: 4.6em }
+.filters .row > span:last-child { display: contents }
+.filters button, .filters select { font: inherit; font-size: .8rem; border: 1px solid var(--grid); background: var(--surface); color: var(--fg); border-radius: 999px; padding: 3px 10px; cursor: pointer }
+.filters button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg) }
+.filters .toggle[aria-pressed="true"] { background: var(--surface); color: var(--fg); border-color: var(--grid) }
+.filters .toggle[aria-pressed="false"] { opacity: .45; text-decoration: line-through }
+.cards-count { font-size: .8rem; color: var(--fg-3); margin: 0 0 4px }
+.item { display: flex; gap: 12px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--grid); cursor: pointer; border-radius: 3px }
+.item:hover, .item:focus-visible { background: var(--mid); outline: none }
+.item .mini { width: 56px; flex: none }
+.item .main { flex: 1; min-width: 0; display: grid; gap: 2px }
+.item .t1 { font-weight: 600; font-size: .9rem }
+.item .t2 { font-family: var(--font-data); font-size: .76rem; color: var(--fg-2) }
+.item .st { font-family: var(--font-data); font-size: .76rem; text-align: right; white-space: nowrap }
+.st-retry { color: var(--worse); font-weight: 600 } .st-right { color: var(--better); font-weight: 600 } .st-new { color: var(--fg-3) }
+.boxline { font-family: var(--font-data); font-size: .82rem; color: var(--fg-2); margin: 0 0 12px }
+.st-due { color: var(--worse); font-weight: 600 } .st-learnt { color: var(--better); font-weight: 600 } .st-learning { color: var(--fg-2) }
+.settings { margin: 0 0 12px; max-width: none }
+.gaps { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 8px 0 }
+.gaps label, .setrow { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--fg) }
+.gaps label { white-space: nowrap }
+.gaps input { width: 3.6em; box-sizing: border-box; font: inherit; font-size: .82rem; padding: 3px 6px; border: 1px solid var(--grid); border-radius: 4px; background: var(--surface); color: var(--fg) }
+.setrow select { font: inherit; font-size: .82rem; border: 1px solid var(--grid); border-radius: 4px; background: var(--surface); color: var(--fg); padding: 3px 6px }
+.more { margin-top: 10px; font: inherit; font-size: .85rem; border: 1px solid var(--grid); background: var(--surface); color: var(--fg); border-radius: 4px; padding: 6px 12px; cursor: pointer }
+.v { font-weight: 600 } .v-worse { color: var(--worse) } .v-better { color: var(--better) } .v-unclear { color: var(--fg-3); font-weight: 400 }
+.v-seems-worse { color: var(--worse); font-weight: 400 } .v-seems-better { color: var(--better); font-weight: 400 }
+.quad .big { font-size: 1.05rem; margin: 2px 0 4px }
+td.v { white-space: normal; text-align: left; min-width: 14ch }
+.panel-title { margin: 0; font-size: 1rem }
+.sub { margin: 4px 0 12px; color: var(--fg-2); font-size: .9rem; max-width: 70ch }
+.clock-bars { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; max-width: 560px }
+.clock-bars .lab { font-size: .82rem; color: var(--fg-2); text-align: right; white-space: nowrap }
+.clock-bars .pair { display: grid; gap: 3px }
+.clock-bars .bar { display: flex; align-items: center; gap: 6px; font-family: var(--font-data); font-size: .78rem; color: var(--fg-2); font-variant-numeric: tabular-nums }
+.clock-bars .bar span { display: block; height: 9px; border-radius: 0 3px 3px 0; min-width: 2px }
+</style>
+</head><body>
+<main>
+  <header>
+    <p class="eyebrow" id="eyebrow">Blunder map</p>
+    <h1 id="title">Your blunders</h1>
+    <p class="lede" id="coverage"></p>
+    <p class="lede">Each dot is one of your blunders. The further right, the more good moves the position had; the higher up, the more clock you had left. Hover over a dot to see the position, without the move so it stays a fair test. Tap it to try it as a flashcard, then open the game on <span class="site-name">Lichess</span> to see what happened next. Use the buttons under the map to pick which game phases to show, and how serious the blunders are: costly, serious or game-losing. The flashcards follow what's shown.</p>
+    <p class="lede">Below the map, you're compared with your opponents in the same games.</p>
+  </header>
+
+  <section id="report" style="display:grid;gap:20px">
+    <details class="area" open data-area="summary"><summary>Summary</summary>
+    <div class="finding" id="finding"></div>
+    </details>
+    <details class="area" open data-area="map"><summary>The map</summary>
+    <div class="panel">
+      <div class="chart-wrap"><svg id="chart-dots" viewBox="0 0 780 470" role="img" aria-label="Your blunders by good moves and clock left, coloured by game phase"></svg></div>
+      <div class="legend" id="phase-legend"></div>
+      <div class="legend" id="severity-legend"></div>
+      <div class="legend"><span>Background: how often your opponents blundered there<span class="scale" id="greyscale"></span><span class="lab">rarely … often</span></span></div>
+      <div class="tip" hidden></div>
+    </div>
+    </details>
+    <details class="area" open data-area="quads"><summary>The four quarters of the map</summary>
+    <div class="quads" id="quads-mine" aria-label="Your blunders by quadrant"></div>
+    </details>
+    <details class="area" open data-area="card"><summary>Flashcard</summary>
+    <div class="panel card" id="card" aria-live="polite">
+      <div id="card-board"></div>
+      <div>
+        <p class="eyebrow" id="card-eyebrow">Flashcard</p>
+        <h2 id="card-title">Tap any dot to turn it into a flashcard</h2>
+        <p class="facts" id="card-facts">You get the position before the blunder. Play a good move on the board and it is marked right or wrong. No hints.</p>
+        <p class="boxline" id="card-box" hidden></p>
+        <p class="answer" id="card-answer" hidden></p>
+        <div class="btns">
+          <button type="button" id="card-giveup" hidden>Show the answer</button>
+          <button type="button" id="card-retry" hidden>Try again</button>
+          <button type="button" id="card-prev" disabled>‹ Previous card</button>
+          <button type="button" class="primary" id="card-next">Next card</button>
+          <a id="card-link" target="_blank" rel="noopener" hidden>Open the game</a>
+          <a id="card-analyse" target="_blank" rel="noopener" hidden>Analyse position ↗</a>
+        </div>
+        <p class="record" id="card-record"></p>
+        <p class="record"><a href="#" id="cards-open">Your cards ›</a></p>
+      </div>
+    </div>
+    </details>
+    <details class="area" open data-area="phases"><summary>By game phase</summary>
+    <div class="panel">
+      <div class="table-wrap"><table id="phase-table" aria-label="Your blunders by game phase"></table></div>
+    </div>
+    </details>
+    <details class="area" open data-area="clock"><summary>How much clock you had left when you moved</summary>
+    <div class="panel">
+      <p class="sub" id="clock-sentence"></p>
+      <div class="clock-bars" id="clock-bars" role="img" aria-label="Share of your moves and your opponents' moves in each clock band"></div>
+      <div class="legend"><span><span class="key" style="background:var(--you)"></span>your moves</span><span><span class="key" style="background:var(--opp)"></span>your opponents' moves</span></div>
+    </div>
+    </details>
+  </section>
+
+  <details class="notes" id="notes">
+    <summary>Notes: what the words mean, how the flashcards work, how your record is saved</summary>
+    <p><b>Blunders</b> are the PlayMoreBlitz bot's own verdicts, using the same method as Lichess. <b>Good moves</b>: Stockfish looked at every legal move in the position, and a move counts as good if it is almost as strong as the best one. Few good moves means only one or two moves keep the game on track. <b>Game phases</b> use the same rule as Lichess and the bot: the middlegame starts when pieces are developed or traded, the endgame when six or fewer queens, rooks, bishops and knights are left.</p>
+    <p><b>Compared with your opponents.</b> Your opponents are the players you met in these same games. For the whole month, each quarter of the map and each game phase, the page compares how often you blundered with how often they did, allowing for how many moves each of you played there. The words go in steps. "More often", "less often" or "about the same" is only said when your games show it clearly. "Probably …" means your games point that way fairly strongly. "Seems …" means they lean that way, but it could still turn out otherwise. "No clear difference yet" means they don't lean either way. "Too few blunders here to compare yet" means there are too few blunders in that part to compare at all. With under 10 games in the month every comparison says "Not enough games to tell yet", and with 10 to 19 games each statement is one step more cautious than the same numbers would get from 20 or more. More games make the picture sharper.</p>
+    <p><b>Win chance lost</b> is how much the blunder cut your chance of winning, in points out of 100 (a blunder costs at least 15). The filter buttons apply to the dots, the counts and Next card; the comparison words always use all your blunders. After you answer a card it also says what the blunder did to the game (winning = 70+ out of 100, losing = 30 or less).</p>
+    <p id="about-record"><b>Your flashcard record.</b> This page doesn't change: the bot sends a new one when you ask again. Your results are saved by this browser on this device, so they survive a reload or a restart, and next month's page picks them up if you open it in the same browser. They are not sent anywhere. They are lost if you clear your browser's site data or use a private window, and another browser or your phone keeps its own separate record. Your learning settings are kept the same way.</p>
+    <p><b>Flashcards.</b> The board shows the position before your blunder, from your side. Play your move on the board: it counts as right if it is one of the good moves. After you answer, the red arrow is the move you played in the game, the green arrow Stockfish's choice and a blue arrow your answer. Previous card steps back through the cards you've opened on this visit. <b>Boxes:</b> every card you try goes into one of five boxes. Get it right when it's due and it moves up a box; get it wrong (or show the answer) and it goes back to box 1; a "Nearly" counts as wrong unless you change that. A box 1 card is due again straight away, box 2 after a day, box 3 after 3 days, box 4 after a week and box 5 after 3 weeks; box 5 counts as learnt. Next card picks due cards first, then ones you haven't tried. Your cards (the link under the flashcard) lists every card with filters, and its Learning settings let you change the waits. Analyse position opens the position on Lichess's analysis board (free, no account needed) so you can try other moves with an engine; the tick or cross on the card still comes from our own deeper count. Chess pieces: the Lichess “cburnett” set by Colin M.L. Burnett (GPLv2+).</p>
+  </details>
+  <div class="layer" id="cards-layer" hidden>
+    <div class="layer-back" id="cards-back"></div>
+    <section class="layer-panel" role="dialog" aria-modal="true" aria-labelledby="cards-title">
+      <div class="layer-head"><h2 id="cards-title">Your cards</h2><button type="button" id="cards-close" aria-label="Close your cards">✕</button></div>
+      <p class="cards-sum" id="cards-sum"></p>
+      <div class="table-wrap"><table id="cards-split" aria-label="Your cards, by game phase and separately by quarter of the map"></table></div>
+      <details class="notes settings" id="cards-settings">
+        <summary>Learning settings</summary>
+        <p>How long a card waits before it's due again, by box. A right answer moves a card up one box when it's due; a wrong answer, or Show the answer, sends it back to box 1. Box 5 counts as learnt. Saved in this browser, for every map you open here.</p>
+        <div class="gaps" id="set-gaps"></div>
+        <label class="setrow">"Nearly" answers count as <select id="set-nearly"><option value="wrong">wrong (back to box 1)</option><option value="stay">neither (the card stays in its box)</option><option value="right">right</option></select></label>
+        <p><button type="button" class="more" id="set-reset">Back to the standard settings</button></p>
+      </details>
+      <div class="filters">
+        <div class="row"><span>Show</span><span id="cf-status"></span></div>
+        <div class="row"><span>Due</span><span id="cf-due"></span></div>
+        <div class="row"><span>Box</span><span id="cf-box"></span></div>
+        <div class="row"><span>Phase</span><span id="cf-ph"></span></div>
+        <div class="row"><span>Cost</span><span id="cf-cost"></span></div>
+        <div class="row"><span>Quarter</span><span id="cf-q"></span></div>
+        <div class="row"><span>Sort</span><select id="cf-sort" aria-label="Sort the cards"><option value="due" selected>Next due first</option><option value="new">Newest first</option><option value="old">Oldest first</option><option value="cost">Most costly first</option><option value="tries">Most tried first</option><option value="box">Lowest box first</option></select></div>
+      </div>
+      <p class="cards-count" id="cards-count"></p>
+      <div class="list" id="cards-list"></div>
+      <button type="button" class="more" id="cards-more" hidden>Show 50 more</button>
+    </section>
+  </div>
+</main>
+
+<script>
+const DATA = /*DATA*/null;
+const NS = "http://www.w3.org/2000/svg";
+const COLS = ["1", "2", "3", "4–5", "6–10", "11+"];
+const PH = { opening: ["Opening", "open"], middle: ["Middlegame", "middle"], end: ["Endgame", "end"] };
+const pct = (a, b) => (100 * a / b).toFixed(1) + "%";
+// severity = win chance lost (percentage points, Lichess evals); every blunder loses at least 15
+const BANDS = [[15, 25, "Costly"], [25, 40, "Serious"], [40, 101, "Game-losing"]];
+const band = d => { if (d.wb == null) return 0; const lost = d.wb - d.wa; return lost < 25 ? 0 : lost < 40 ? 1 : 2; };
+// what the blunder did to the game: winning = 70%+ win chance, losing = 30% or less
+function impact(d) {
+  if (d.wb == null) return "";
+  const st = w => Math.round(w) >= 70 ? "win" : Math.round(w) <= 30 ? "loss" : "level", k = st(d.wb) + ">" + st(d.wa);
+  const what = {
+    "win>win": "Still winning afterwards", "win>level": "Threw away a win", "win>loss": "Turned a win into a loss",
+    "level>level": "Made a level game worse, still holdable", "level>loss": "Turned a level game into a losing one",
+    "loss>loss": "Already losing: made a bad position worse",
+  }[k] || "Changed the game";
+  return `<b>What it did: ${what}.</b> Your win chance went from ${Math.round(d.wb)}% to ${Math.round(d.wa)}%.`;
+}
+const mk = svg => (n, a, parent) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); (parent || svg).appendChild(e); return e; };
+function tipper(svg) {
+  const panel = svg.closest(".panel"), tip = panel.querySelector(".tip");
+  return {
+    show(ev, html) {
+      const box = panel.getBoundingClientRect(), t = ev.target.getBoundingClientRect();
+      const px = (ev.clientX || t.x + t.width / 2) - box.left, py = (ev.clientY || t.y + t.height / 2) - box.top;
+      tip.innerHTML = html; tip.hidden = false;
+      tip.style.left = Math.max(6, Math.min(px + 14, box.width - tip.offsetWidth - 6)) + "px";
+      tip.style.top = (py + 16 + tip.offsetHeight > box.height ? Math.max(6, py - 12 - tip.offsetHeight) : py + 16) + "px";
+    },
+    hide() { tip.hidden = true; }
+  };
+}
+
+// Board from the piece-placement part of a FEN, seen from `white`'s side; arrows = [[uci, colour], ...]
+// Lichess cburnett pieces by Colin M.L. Burnett, GPLv2+ (from lichess-org/lila public/piece/cburnett)
+const PIECE = {"wK":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIyLjUgMTEuNjNWNk0yMCA4aDUiIHN0cm9rZS1saW5lam9pbj0ibWl0ZXIiLz48cGF0aCBkPSJNMjIuNSAyNXM0LjUtNy41IDMtMTAuNWMwIDAtMS0yLjUtMy0yLjVzLTMgMi41LTMgMi41Yy0xLjUgMyAzIDEwLjUgMyAxMC41IiBmaWxsPSIjZmZmIiBzdHJva2UtbGluZWNhcD0iYnV0dCIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciIvPjxwYXRoIGQ9Ik0xMS41IDM3YzUuNSAzLjUgMTUuNSAzLjUgMjEgMHYtN3M5LTQuNSA2LTEwLjVjLTQtNi41LTEzLjUtMy41LTE2IDRWMjd2LTMuNWMtMy41LTcuNS0xMy0xMC41LTE2LTQtMyA2IDUgMTAgNSAxMFYzN3oiIGZpbGw9IiNmZmYiLz48cGF0aCBkPSJNMTEuNSAzMGM1LjUtMyAxNS41LTMgMjEgMG0tMjEgMy41YzUuNS0zIDE1LjUtMyAyMSAwbS0yMSAzLjVjNS41LTMgMTUuNS0zIDIxIDAiLz48L2c+PC9zdmc+","wQ":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSIjZmZmIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTggMTJhMiAyIDAgMSAxLTQgMCAyIDIgMCAxIDEgNCAwem0xNi41LTQuNWEyIDIgMCAxIDEtNCAwIDIgMiAwIDEgMSA0IDB6TTQxIDEyYTIgMiAwIDEgMS00IDAgMiAyIDAgMSAxIDQgMHpNMTYgOC41YTIgMiAwIDEgMS00IDAgMiAyIDAgMSAxIDQgMHpNMzMgOWEyIDIgMCAxIDEtNCAwIDIgMiAwIDEgMSA0IDB6Ii8+PHBhdGggZD0iTTkgMjZjOC41LTEuNSAyMS0xLjUgMjcgMGwyLTEyLTcgMTFWMTFsLTUuNSAxMy41LTMtMTUtMyAxNS01LjUtMTRWMjVMNyAxNGwyIDEyeiIgc3Ryb2tlLWxpbmVjYXA9ImJ1dHQiLz48cGF0aCBkPSJNOSAyNmMwIDIgMS41IDIgMi41IDQgMSAxLjUgMSAxIC41IDMuNS0xLjUgMS0xLjUgMi41LTEuNSAyLjUtMS41IDEuNS41IDIuNS41IDIuNSA2LjUgMSAxNi41IDEgMjMgMCAwIDAgMS41LTEgMC0yLjUgMCAwIC41LTEuNS0xLTIuNS0uNS0yLjUtLjUtMiAuNS0zLjUgMS0yIDIuNS0yIDIuNS00LTguNS0xLjUtMTguNS0xLjUtMjcgMHoiIHN0cm9rZS1saW5lY2FwPSJidXR0Ii8+PHBhdGggZD0iTTExLjUgMzBjMy41LTEgMTguNS0xIDIyIDBNMTIgMzMuNWM2LTEgMTUtMSAyMSAwIiBmaWxsPSJub25lIi8+PC9nPjwvc3ZnPg==","wR":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSIjZmZmIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTkgMzloMjd2LTNIOXYzem0zLTN2LTRoMjF2NEgxMnptLTEtMjJWOWg0djJoNVY5aDV2Mmg1VjloNHY1IiBzdHJva2UtbGluZWNhcD0iYnV0dCIvPjxwYXRoIGQ9Ik0zNCAxNGwtMyAzSDE0bC0zLTMiLz48cGF0aCBkPSJNMzEgMTd2MTIuNUgxNFYxNyIgc3Ryb2tlLWxpbmVjYXA9ImJ1dHQiIHN0cm9rZS1saW5lam9pbj0ibWl0ZXIiLz48cGF0aCBkPSJNMzEgMjkuNWwxLjUgMi41aC0yMGwxLjUtMi41Ii8+PHBhdGggZD0iTTExIDE0aDIzIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWpvaW49Im1pdGVyIi8+PC9nPjwvc3ZnPg==","wB":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGcgZmlsbD0iI2ZmZiIgc3Ryb2tlLWxpbmVjYXA9ImJ1dHQiPjxwYXRoIGQ9Ik05IDM2YzMuMzktLjk3IDEwLjExLjQzIDEzLjUtMiAzLjM5IDIuNDMgMTAuMTEgMS4wMyAxMy41IDIgMCAwIDEuNjUuNTQgMyAyLS42OC45Ny0xLjY1Ljk5LTMgLjUtMy4zOS0uOTctMTAuMTEuNDYtMTMuNS0xLTMuMzkgMS40Ni0xMC4xMS4wMy0xMy41IDEtMS4zNTQuNDktMi4zMjMuNDctMy0uNSAxLjM1NC0xLjk0IDMtMiAzLTJ6Ii8+PHBhdGggZD0iTTE1IDMyYzIuNSAyLjUgMTIuNSAyLjUgMTUgMCAuNS0xLjUgMC0yIDAtMiAwLTIuNS0yLjUtNC0yLjUtNCA1LjUtMS41IDYtMTEuNS01LTE1LjUtMTEgNC0xMC41IDE0LTUgMTUuNSAwIDAtMi41IDEuNS0yLjUgNCAwIDAtLjUuNSAwIDJ6Ii8+PHBhdGggZD0iTTI1IDhhMi41IDIuNSAwIDEgMS01IDAgMi41IDIuNSAwIDEgMSA1IDB6Ii8+PC9nPjxwYXRoIGQ9Ik0xNy41IDI2aDEwTTE1IDMwaDE1bS03LjUtMTQuNXY1TTIwIDE4aDUiIHN0cm9rZS1saW5lam9pbj0ibWl0ZXIiLz48L2c+PC9zdmc+","wN":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIyIDEwYzEwLjUgMSAxNi41IDggMTYgMjlIMTVjMC05IDEwLTYuNSA4LTIxIiBmaWxsPSIjZmZmIi8+PHBhdGggZD0iTTI0IDE4Yy4zOCAyLjkxLTUuNTUgNy4zNy04IDktMyAyLTIuODIgNC4zNC01IDQtMS4wNDItLjk0IDEuNDEtMy4wNCAwLTMtMSAwIC4xOSAxLjIzLTEgMi0xIDAtNC4wMDMgMS00LTQgMC0yIDYtMTIgNi0xMnMxLjg5LTEuOSAyLTMuNWMtLjczLS45OTQtLjUtMi0uNS0zIDEtMSAzIDIuNSAzIDIuNWgycy43OC0xLjk5MiAyLjUtM2MxIDAgMSAzIDEgMyIgZmlsbD0iI2ZmZiIvPjxwYXRoIGQ9Ik05LjUgMjUuNWEuNS41IDAgMSAxLTEgMCAuNS41IDAgMSAxIDEgMHptNS40MzMtOS43NWEuNSAxLjUgMzAgMSAxLS44NjYtLjUuNSAxLjUgMzAgMSAxIC44NjYuNXoiIGZpbGw9IiMwMDAiLz48L2c+PC9zdmc+","wP":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48cGF0aCBkPSJNMjIuNSA5Yy0yLjIxIDAtNCAxLjc5LTQgNCAwIC44OS4yOSAxLjcxLjc4IDIuMzhDMTcuMzMgMTYuNSAxNiAxOC41OSAxNiAyMWMwIDIuMDMuOTQgMy44NCAyLjQxIDUuMDMtMyAxLjA2LTcuNDEgNS41NS03LjQxIDEzLjQ3aDIzYzAtNy45Mi00LjQxLTEyLjQxLTcuNDEtMTMuNDcgMS40Ny0xLjE5IDIuNDEtMyAyLjQxLTUuMDMgMC0yLjQxLTEuMzMtNC41LTMuMjgtNS42Mi40OS0uNjcuNzgtMS40OS43OC0yLjM4IDAtMi4yMS0xLjc5LTQtNC00eiIgZmlsbD0iI2ZmZiIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+","bK":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIyLjUgMTEuNjNWNiIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciIvPjxwYXRoIGQ9Ik0yMi41IDI1czQuNS03LjUgMy0xMC41YzAgMC0xLTIuNS0zLTIuNXMtMyAyLjUtMyAyLjVjLTEuNSAzIDMgMTAuNSAzIDEwLjUiIGZpbGw9IiMwMDAiIHN0cm9rZS1saW5lY2FwPSJidXR0IiBzdHJva2UtbGluZWpvaW49Im1pdGVyIi8+PHBhdGggZD0iTTExLjUgMzdjNS41IDMuNSAxNS41IDMuNSAyMSAwdi03czktNC41IDYtMTAuNWMtNC02LjUtMTMuNS0zLjUtMTYgNFYyN3YtMy41Yy0zLjUtNy41LTEzLTEwLjUtMTYtNC0zIDYgNSAxMCA1IDEwVjM3eiIgZmlsbD0iIzAwMCIvPjxwYXRoIGQ9Ik0yMCA4aDUiIHN0cm9rZS1saW5lam9pbj0ibWl0ZXIiLz48cGF0aCBkPSJNMzIgMjkuNXM4LjUtNCA2LjAzLTkuNjVDMzQuMTUgMTQgMjUgMTggMjIuNSAyNC41bC4wMSAyLjEtLjAxLTIuMUMyMCAxOCA5LjkwNiAxNCA2Ljk5NyAxOS44NWMtMi40OTcgNS42NSA0Ljg1MyA5IDQuODUzIDkiIHN0cm9rZT0iI2VjZWNlYyIvPjxwYXRoIGQ9Ik0xMS41IDMwYzUuNS0zIDE1LjUtMyAyMSAwbS0yMSAzLjVjNS41LTMgMTUuNS0zIDIxIDBtLTIxIDMuNWM1LjUtMyAxNS41LTMgMjEgMCIgc3Ryb2tlPSIjZWNlY2VjIi8+PC9nPjwvc3ZnPg==","bQ":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGcgc3Ryb2tlPSJub25lIj48Y2lyY2xlIGN4PSI2IiBjeT0iMTIiIHI9IjIuNzUiLz48Y2lyY2xlIGN4PSIxNCIgY3k9IjkiIHI9IjIuNzUiLz48Y2lyY2xlIGN4PSIyMi41IiBjeT0iOCIgcj0iMi43NSIvPjxjaXJjbGUgY3g9IjMxIiBjeT0iOSIgcj0iMi43NSIvPjxjaXJjbGUgY3g9IjM5IiBjeT0iMTIiIHI9IjIuNzUiLz48L2c+PHBhdGggZD0iTTkgMjZjOC41LTEuNSAyMS0xLjUgMjcgMGwyLjUtMTIuNUwzMSAyNWwtLjMtMTQuMS01LjIgMTMuNi0zLTE0LjUtMyAxNC41LTUuMi0xMy42TDE0IDI1IDYuNSAxMy41IDkgMjZ6IiBzdHJva2UtbGluZWNhcD0iYnV0dCIvPjxwYXRoIGQ9Ik05IDI2YzAgMiAxLjUgMiAyLjUgNCAxIDEuNSAxIDEgLjUgMy41LTEuNSAxLTEuNSAyLjUtMS41IDIuNS0xLjUgMS41LjUgMi41LjUgMi41IDYuNSAxIDE2LjUgMSAyMyAwIDAgMCAxLjUtMSAwLTIuNSAwIDAgLjUtMS41LTEtMi41LS41LTIuNS0uNS0yIC41LTMuNSAxLTIgMi41LTIgMi41LTQtOC41LTEuNS0xOC41LTEuNS0yNyAweiIgc3Ryb2tlLWxpbmVjYXA9ImJ1dHQiLz48cGF0aCBkPSJNMTEgMzguNWEzNSAzNSAxIDAgMCAyMyAwIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0iYnV0dCIvPjxwYXRoIGQ9Ik0xMSAyOWEzNSAzNSAxIDAgMSAyMyAwbS0yMS41IDIuNWgyMG0tMjEgM2EzNSAzNSAxIDAgMCAyMiAwbS0yMyAzYTM1IDM1IDEgMCAwIDI0IDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2VjZWNlYyIvPjwvZz48L3N2Zz4=","bR":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTkgMzloMjd2LTNIOXYzem0zLjUtN2wxLjUtMi41aDE3bDEuNSAyLjVoLTIwem0tLjUgNHYtNGgyMXY0SDEyeiIgc3Ryb2tlLWxpbmVjYXA9ImJ1dHQiLz48cGF0aCBkPSJNMTQgMjkuNXYtMTNoMTd2MTNIMTR6IiBzdHJva2UtbGluZWNhcD0iYnV0dCIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciIvPjxwYXRoIGQ9Ik0xNCAxNi41TDExIDE0aDIzbC0zIDIuNUgxNHpNMTEgMTRWOWg0djJoNVY5aDV2Mmg1VjloNHY1SDExeiIgc3Ryb2tlLWxpbmVjYXA9ImJ1dHQiLz48cGF0aCBkPSJNMTIgMzUuNWgyMW0tMjAtNGgxOW0tMTgtMmgxN20tMTctMTNoMTdNMTEgMTRoMjMiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2VjZWNlYyIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtbGluZWpvaW49Im1pdGVyIi8+PC9nPjwvc3ZnPg==","bB":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGcgZmlsbD0iIzAwMCIgc3Ryb2tlLWxpbmVjYXA9ImJ1dHQiPjxwYXRoIGQ9Ik05IDM2YzMuMzktLjk3IDEwLjExLjQzIDEzLjUtMiAzLjM5IDIuNDMgMTAuMTEgMS4wMyAxMy41IDIgMCAwIDEuNjUuNTQgMyAyLS42OC45Ny0xLjY1Ljk5LTMgLjUtMy4zOS0uOTctMTAuMTEuNDYtMTMuNS0xLTMuMzkgMS40Ni0xMC4xMS4wMy0xMy41IDEtMS4zNTQuNDktMi4zMjMuNDctMy0uNSAxLjM1NC0xLjk0IDMtMiAzLTJ6Ii8+PHBhdGggZD0iTTE1IDMyYzIuNSAyLjUgMTIuNSAyLjUgMTUgMCAuNS0xLjUgMC0yIDAtMiAwLTIuNS0yLjUtNC0yLjUtNCA1LjUtMS41IDYtMTEuNS01LTE1LjUtMTEgNC0xMC41IDE0LTUgMTUuNSAwIDAtMi41IDEuNS0yLjUgNCAwIDAtLjUuNSAwIDJ6Ii8+PHBhdGggZD0iTTI1IDhhMi41IDIuNSAwIDEgMS01IDAgMi41IDIuNSAwIDEgMSA1IDB6Ii8+PC9nPjxwYXRoIGQ9Ik0xNy41IDI2aDEwTTE1IDMwaDE1bS03LjUtMTQuNXY1TTIwIDE4aDUiIHN0cm9rZT0iI2VjZWNlYyIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciIvPjwvZz48L3N2Zz4=","bN":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIHN0cm9rZT0iIzAwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIyIDEwYzEwLjUgMSAxNi41IDggMTYgMjlIMTVjMC05IDEwLTYuNSA4LTIxIiBmaWxsPSIjMDAwIi8+PHBhdGggZD0iTTI0IDE4Yy4zOCAyLjkxLTUuNTUgNy4zNy04IDktMyAyLTIuODIgNC4zNC01IDQtMS4wNDItLjk0IDEuNDEtMy4wNCAwLTMtMSAwIC4xOSAxLjIzLTEgMi0xIDAtNC4wMDMgMS00LTQgMC0yIDYtMTIgNi0xMnMxLjg5LTEuOSAyLTMuNWMtLjczLS45OTQtLjUtMi0uNS0zIDEtMSAzIDIuNSAzIDIuNWgycy43OC0xLjk5MiAyLjUtM2MxIDAgMSAzIDEgMyIgZmlsbD0iIzAwMCIvPjxwYXRoIGQ9Ik05LjUgMjUuNWEuNS41IDAgMSAxLTEgMCAuNS41IDAgMSAxIDEgMHptNS40MzMtOS43NWEuNSAxLjUgMzAgMSAxLS44NjYtLjUuNSAxLjUgMzAgMSAxIC44NjYuNXoiIGZpbGw9IiNlY2VjZWMiIHN0cm9rZT0iI2VjZWNlYyIvPjxwYXRoIGQ9Ik0yNC41NSAxMC40bC0uNDUgMS40NS41LjE1YzMuMTUgMSA1LjY1IDIuNDkgNy45IDYuNzVTMzUuNzUgMjkuMDYgMzUuMjUgMzlsLS4wNS41aDIuMjVsLjA1LS41Yy41LTEwLjA2LS44OC0xNi44NS0zLjI1LTIxLjM0LTIuMzctNC40OS01Ljc5LTYuNjQtOS4xOS03LjE2bC0uNTEtLjF6IiBmaWxsPSIjZWNlY2VjIiBzdHJva2U9Im5vbmUiLz48L2c+PC9zdmc+","bP":"data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNDUgNDUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjQ1IiBoZWlnaHQ9IjQ1Ij48cGF0aCBkPSJNMjIuNSA5Yy0yLjIxIDAtNCAxLjc5LTQgNCAwIC44OS4yOSAxLjcxLjc4IDIuMzhDMTcuMzMgMTYuNSAxNiAxOC41OSAxNiAyMWMwIDIuMDMuOTQgMy44NCAyLjQxIDUuMDMtMyAxLjA2LTcuNDEgNS41NS03LjQxIDEzLjQ3aDIzYzAtNy45Mi00LjQxLTEyLjQxLTcuNDEtMTMuNDcgMS40Ny0xLjE5IDIuNDEtMyAyLjQxLTUuMDMgMC0yLjQxLTEuMzMtNC41LTMuMjgtNS42Mi40OS0uNjcuNzgtMS40OS43OC0yLjM4IDAtMi4yMS0xLjc5LTQtNC00eiIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+"};
+const PLAYED = "rgba(227, 73, 72, .88)", BEST = "rgba(27, 175, 122, .9)", YOURS = "rgba(42, 120, 214, .85)";
+function boardSVG(fen, white, arrows, label) {
+  const at = (f, r) => white ? [f * 100, (7 - r) * 100] : [(7 - f) * 100, r * 100];  // f, r = 0..7 from a1
+  const sq = s => [s.charCodeAt(0) - 97, +s[1] - 1];
+  let out = "";
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const [x, y] = at(f, r);
+    out += `<rect x="${x}" y="${y}" width="100" height="100" fill="${(f + r) % 2 ? "#f0d9b5" : "#b58863"}"/>`;
+  }
+  for (const [uci, c] of arrows) for (const s of [uci.slice(0, 2), uci.slice(2, 4)]) {
+    const [x, y] = at(...sq(s));
+    out += `<rect x="${x}" y="${y}" width="100" height="100" fill="${c}" opacity=".35"/>`;
+  }
+  for (let i = 0; i < 8; i++) {
+    const [fx, fy] = at(i, white ? 0 : 7), [rx, ry] = at(white ? 0 : 7, i);
+    out += `<text class="coord" x="${fx + 93}" y="${fy + 94}" text-anchor="end" style="fill:${(i + (white ? 0 : 7)) % 2 ? "#b58863" : "#f0d9b5"}">${"abcdefgh"[i]}</text>`;
+    out += `<text class="coord" x="${rx + 5}" y="${ry + 21}" style="fill:${(i + (white ? 0 : 7)) % 2 ? "#b58863" : "#f0d9b5"}">${i + 1}</text>`;
+  }
+  fen.split("/").forEach((row, ri) => {
+    let f = 0;
+    for (const ch of row) {
+      if (ch >= "1" && ch <= "8") { f += +ch; continue; }
+      const [x, y] = at(f, 7 - ri), w = ch === ch.toUpperCase();
+      out += `<image href="${PIECE[(w ? "w" : "b") + ch.toUpperCase()]}" x="${x}" y="${y}" width="100" height="100" data-sq="${"abcdefgh"[f]}${8 - ri}" data-side="${w ? "w" : "b"}" data-p="${ch.toUpperCase()}"/>`;
+      f++;
+    }
+  });
+  for (const [uci, c] of arrows) {
+    const [x1, y1] = at(...sq(uci.slice(0, 2))).map(v => v + 50), [x2, y2] = at(...sq(uci.slice(2, 4))).map(v => v + 50);
+    const len = Math.hypot(x2 - x1, y2 - y1), ux = (x2 - x1) / len, uy = (y2 - y1) / len, px = -uy, py = ux;
+    const hx = x2 - ux * 42, hy = y2 - uy * 42, w = 9, hw = 26;
+    const pts = [[x1 + px * w, y1 + py * w], [hx + px * w, hy + py * w], [hx + px * hw, hy + py * hw], [x2, y2],
+                 [hx - px * hw, hy - py * hw], [hx - px * w, hy - py * w], [x1 - px * w, y1 - py * w]];
+    out += `<polygon points="${pts.map(p => p.map(v => v.toFixed(1)).join(",")).join(" ")}" fill="${c}"/>`;
+  }
+  return `<svg class="board" viewBox="0 0 800 800" role="img" aria-label="${label}">${out}</svg>`;
+}
+
+// Make a board from boardSVG playable for the side to move: drag a piece, or tap it then tap a square. No hints:
+// only the picked-up piece's square is highlighted. onMove gets the move in UCI (pawns reaching the last rank become queens).
+function playable(svg, d, onMove) {
+  const white = d.p % 2, me = white ? "w" : "b", NSB = "http://www.w3.org/2000/svg";
+  svg.style.touchAction = "none"; svg.style.cursor = "pointer";
+  const xy = sq => { const f = sq.charCodeAt(0) - 97, r = +sq[1] - 1; return white ? [f * 100, (7 - r) * 100] : [(7 - f) * 100, r * 100]; };
+  const point = ev => { const b = svg.getBoundingClientRect(); return [(ev.clientX - b.left) / b.width * 800, (ev.clientY - b.top) / b.height * 800]; };
+  const sqAt = ev => {
+    const [x, y] = point(ev), c = Math.floor(x / 100), r = Math.floor(y / 100);
+    if (c < 0 || c > 7 || r < 0 || r > 7) return null;
+    return "abcdefgh"[white ? c : 7 - c] + (white ? 8 - r : r + 1);
+  };
+  const piece = sq => svg.querySelector(`image[data-sq="${sq}"]`);
+  const own = sq => { const im = sq && piece(sq); return im && im.dataset.side === me; };
+  let from = null, drag = null, hl = null;
+  const select = sq => {
+    if (hl) hl.remove();
+    hl = null; from = sq;
+    if (!sq) return;
+    const [x, y] = xy(sq);
+    hl = document.createElementNS(NSB, "rect");
+    Object.entries({ x, y, width: 100, height: 100, fill: "rgba(20, 85, 30, .45)" }).forEach(([k, v]) => hl.setAttribute(k, v));
+    svg.insertBefore(hl, svg.querySelector("image"));
+  };
+  const snap = im => { const [x, y] = xy(im.dataset.sq); im.setAttribute("x", x); im.setAttribute("y", y); };
+  const move = (a, b) => {
+    const im = piece(a), promo = im.dataset.p === "P" && (b[1] === "8" || b[1] === "1") ? "q" : "";
+    select(null);
+    onMove(a + b + promo);
+  };
+  svg.addEventListener("pointerdown", ev => {
+    const sq = sqAt(ev);
+    if (!sq) return;
+    if (from && sq !== from && !own(sq)) return move(from, sq);
+    if (!own(sq)) return select(null);
+    select(sq);
+    const im = piece(sq);
+    svg.appendChild(im);
+    drag = { im, moved: false };
+    svg.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  });
+  svg.addEventListener("pointermove", ev => {
+    if (!drag) return;
+    const [x, y] = point(ev);
+    drag.moved = true;
+    drag.im.setAttribute("x", x - 50); drag.im.setAttribute("y", y - 50);
+  });
+  const drop = ev => {
+    if (!drag) return;
+    const { im, moved } = drag, sq = sqAt(ev);
+    drag = null;
+    snap(im);
+    if (moved && sq && sq !== from) move(from, sq);
+  };
+  svg.addEventListener("pointerup", drop);
+  svg.addEventListener("pointercancel", ev => { if (drag) { snap(drag.im); drag = null; } });
+}
+
+function drawDots(DATA) {
+  const svg = document.getElementById("chart-dots"), el = mk(svg), tt = tipper(svg);
+  const W = 780, H = 470, L = 64, R = 16, T = 16, B = 64, PW = W - L - R, PHt = H - T - B;
+  const CLOCK = [[0, 10], [10, 25], [25, 50], [50, 75], [75, 100]];
+  const STEPS = [1, 2, 4, 7, 10], ALPHA = [0.03, 0.07, 0.12, 0.18, 0.26, 0.34];
+  const colW = PW / COLS.length, y = p => T + PHt * (1 - p / 100);
+  const step = r => { let i = 0; while (i < STEPS.length && r >= STEPS[i]) i++; return i; };
+  const col = g => g === 1 ? 0 : g === 2 ? 1 : g === 3 ? 2 : g <= 5 ? 3 : g <= 10 ? 4 : 5;
+
+  for (const x of DATA.cells) {
+    if (!x.on) continue;
+    const [lo, hi] = CLOCK[x.c], rate = 100 * x.ob / x.on;
+    const r = el("rect", { x: L + x.g * colW + 1, y: y(hi) + 1, width: colW - 2, height: y(lo) - y(hi) - 2, fill: `rgba(var(--ink-rgb), ${ALPHA[step(rate)]})` });
+    const what = x.ob ? `1 blunder in ${Math.max(1, Math.round(x.on / x.ob))} moves` : `no blunders in ${x.on} moves`;
+    r.addEventListener("mousemove", ev => tt.show(ev, `<b>${COLS[x.g]} good move${x.g ? "s" : ""}, ${lo}–${hi}% clock</b><br>your opponents: ${what}`));
+    r.addEventListener("mouseleave", tt.hide);
+  }
+  for (let p = 0; p <= 100; p += 25) {
+    el("line", { x1: L, x2: L + PW, y1: y(p), y2: y(p), stroke: "var(--grid)", "stroke-width": 1 });
+    el("text", { x: L - 8, y: y(p) + 4, "text-anchor": "end" }).textContent = p + "%";
+  }
+  COLS.forEach((c, i) => { el("text", { x: L + colW * (i + .5), y: T + PHt + 18, "text-anchor": "middle" }).textContent = c; });
+  el("text", { x: L + PW / 2, y: H - 14, "text-anchor": "middle", class: "axis-title" }).textContent = "Good moves in the position (fewer = less forgiving)";
+  el("text", { x: 16, y: T + PHt / 2, "text-anchor": "middle", class: "axis-title", transform: `rotate(-90 16 ${T + PHt / 2})` }).textContent = "Clock left (% of starting time)";
+  const qx = L + colW * 2, qy = y(25);
+  el("line", { x1: qx, x2: qx, y1: T, y2: T + PHt, stroke: "var(--fg)", "stroke-width": 1.5, "stroke-dasharray": "5 4" });
+  el("line", { x1: L, x2: L + PW, y1: qy, y2: qy, stroke: "var(--fg)", "stroke-width": 1.5, "stroke-dasharray": "5 4" });
+
+  const hash = s => { let h = 2166136261; for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return ((h >>> 0) % 1000) / 1000; };
+  const shape = (ph, cx, cy, parent) => {
+    const cls = "mark " + PH[ph][1];
+    if (ph === "opening") return el("circle", { cx, cy, r: 4.5, class: cls }, parent);
+    if (ph === "middle") return el("path", { d: `M${cx},${cy - 5.5}L${cx + 5.2},${cy + 4}L${cx - 5.2},${cy + 4}Z`, class: cls }, parent);
+    return el("rect", { x: cx - 4.2, y: cy - 4.2, width: 8.4, height: 8.4, rx: 1, class: cls }, parent);
+  };
+  const layers = {};
+  for (const ph of ["end", "middle", "opening"]) layers[ph] = el("g", {});
+  const moveNo = d => `${Math.ceil(d.p / 2)}${d.p % 2 ? "." : "..."}`;
+  const clock = d => `${Math.floor(d.secs / 60)}:${String(Math.round(d.secs % 60)).padStart(2, "0")}`;
+  const side = d => d.p % 2 ? "White" : "Black";
+  const dots = [];
+  for (const d of DATA.mine) {
+    const cx = L + colW * (col(d.good) + 0.12 + 0.76 * hash(d.g + d.p));
+    const a = el("g", { class: "dot", tabindex: 0, role: "button", "aria-label": `${PH[d.ph][0]} blunder, move ${Math.ceil(d.p / 2)}, ${d.good} good moves, ${Math.round(d.pct)}% clock: open as a flashcard` }, layers[d.ph]);
+    shape(d.ph, cx, y(Math.min(d.pct, 100)), a);
+    dots.push([a, d]);
+    // spoiler-free: the board without the move, so the flashcard still works after a hover
+    const html = () => `<b>${PH[d.ph][0]} · ${side(d)} to move (you)</b><br>${d.date} · ${d.tc}<br>clock ${clock(d)} (${Math.round(d.pct)}%) · ${d.good} good of ${d.legal}<br>lost ${d.wb == null ? "?" : Math.round(d.wb - d.wa)} points of win chance (${BANDS[band(d)][2].toLowerCase()})${boardSVG(d.fen, d.p % 2, [], "Position before the blunder")}<br>tap to play it as a flashcard`;
+    a.addEventListener("mousemove", ev => tt.show(ev, html()));
+    a.addEventListener("focus", ev => tt.show(ev, html()));
+    a.addEventListener("mouseleave", tt.hide); a.addEventListener("blur", tt.hide);
+    a.addEventListener("click", () => { tt.hide(); openCard(d, true); });
+    a.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openCard(d, true); } });
+  }
+
+  // flashcard panel: play a move on the board, marked against the good moves; results kept in this browser
+  const $ = id => document.getElementById(id);
+  // each area folds away like the notes; which ones a viewer closed is remembered in this browser
+  const AREAS = "blundermap-areas-v1";
+  let shut = {};
+  try { shut = JSON.parse(localStorage.getItem(AREAS)) || {}; } catch (e) { shut = {}; }
+  document.querySelectorAll("details.area").forEach(el => {
+    if (shut[el.dataset.area]) el.open = false;
+    el.addEventListener("toggle", () => { shut[el.dataset.area] = !el.open; try { localStorage.setItem(AREAS, JSON.stringify(shut)); } catch (e) {} });
+  });
+  const STORE = "blundermap-cards-v1";
+  let record = {};
+  try { record = JSON.parse(localStorage.getItem(STORE)) || {}; } catch (e) { record = {}; }
+  const keyOf = d => DATA.site + ":" + d.g + ":" + d.p;
+  const save = () => { try { localStorage.setItem(STORE, JSON.stringify(record)); } catch (e) {} };
+  let current = null, answered = false;
+  // the cards opened in this visit, so Previous card can step back and Next card forward again before picking a new one
+  let seen = [], at = -1;
+
+  function openCard(d, scroll) {
+    seen = seen.slice(0, at + 1); seen.push(d); at = seen.length - 1;
+    showCard(d, scroll);
+  }
+  function showCard(d, scroll) {
+    current = d;
+    $("card-prev").disabled = at <= 0;
+    dots.forEach(([a, x]) => a.classList.toggle("current", x === d));
+    $("card-eyebrow").textContent = `Flashcard · ${PH[d.ph][0]} · ${d.date} · ${d.tc}`;
+    $("card-title").textContent = `${side(d)} to move (you)`;
+    $("card-facts").textContent = `Move ${Math.ceil(d.p / 2)} · clock ${clock(d)} (${Math.round(d.pct)}%)`;
+    boxLine(d);
+    // the position before the blunder, from the member's side (Lichess #n = after half-move n)
+    $("card-link").href = d.link;
+    $("card-link").textContent = "Open the game before this move";
+    // Lichess's analysis board at this position, board from the side to move (the member); after answering only
+    $("card-analyse").href = `https://lichess.org/analysis/standard/${(d.fen + " " + d.fx).replace(/ /g, "_")}?color=${d.fx[0] === "w" ? "white" : "black"}`;
+    answered = false;
+    ask();
+    $("card").closest("details").open = true;  // tapping a dot opens the flashcard area if it was folded away
+    if (scroll && $("card").getBoundingClientRect().top > innerHeight - 120) $("card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+  function ask(msg) {
+    const d = current;
+    $("card-board").innerHTML = boardSVG(d.fen, d.p % 2, [], "Position before the blunder: play your move");
+    $("card-answer").innerHTML = msg || "Play your move on the board: drag a piece, or tap it and then tap its square.";
+    $("card-answer").hidden = false;
+    $("card-giveup").hidden = false; $("card-retry").hidden = true; $("card-link").hidden = true; $("card-analyse").hidden = true;
+    playable($("card-board").querySelector("svg"), d, tryMove);
+  }
+  function tryMove(u) {
+    const d = current;
+    if (!(u in d.lg)) return ask("That move isn't legal here. Try again.");
+    const right = d.gl.includes(u) || u === d.best, close = !right && d.cl.includes(u);
+    if (!answered) remember(d, right ? "right" : close ? "close" : "wrong");
+    reveal(u, right ? "right" : close ? "close" : u === d.uci ? "game" : "wrong");
+  }
+  function remember(d, result) {
+    answered = true;
+    const r = record[keyOf(d)] || { n: 0, right: 0 };
+    if (!r.h) { r.b0 = r.n ? oldBox(r) : 0; r.t0 = r.at || 0; r.h = []; }  // a record from before the boxes: start from its best guess
+    const now = Date.now();
+    r.n++; r.right += result === "right"; r.last = result; r.at = now; r.h.push([now, result]);
+    record[keyOf(d)] = r; save(); tally(); boxLine(d);
+  }
+  function reveal(u, verdict) {
+    const d = current, no = moveNo(d), san = u ? d.lg[u] : "";
+    const arrows = [[d.best, BEST]];
+    if (d.uci !== d.best) arrows.push([d.uci, PLAYED]);
+    if (u && u !== d.best && u !== d.uci) arrows.push([u, YOURS]);
+    $("card-board").innerHTML = boardSVG(d.fen, d.p % 2, arrows, `Answer: Stockfish's choice ${d.bsan}, the game move ${d.san}`);
+    const head = {
+      right: `<b>✓ Good move: ${no}${san}.</b>`,
+      close: `<b>Nearly: ${no}${san}</b> is playable, but not one of the good moves.`,
+      game: `<b>✗ ${no}${san} is the move you played in the game</b>, the blunder.`,
+      wrong: `<b>✗ ${no}${san}</b> is not one of the good moves.`,
+      gaveup: `<b>Answer shown.</b>`,
+    }[verdict];
+    const goods = d.gl.map(m => d.lg[m]).join(", ");
+    $("card-answer").innerHTML = `${head}<br>`
+      + (u && u !== d.best && u !== d.uci ? `<i style="background:${YOURS}"></i>your move ${san}<br>` : "")
+      + (d.uci !== d.best ? `<i style="background:${PLAYED}"></i>in the game you played ${no}${d.san}<br>` : "")
+      + `<i style="background:${BEST}"></i>Stockfish plays ${no}${d.bsan}<br>`
+      + `${d.gl.length === 1 ? "The only good move" : `Good moves (${d.gl.length} of ${d.legal})`}: ${goods}.`
+      + (d.gl.includes(d.uci) || d.uci === d.best ? " The deeper search counts your game move as good here, so the quicker check that called it a blunder looks harsh." : "")
+      + `<span class="impact">${impact(d)}</span>`;
+    $("card-giveup").hidden = true; $("card-retry").hidden = verdict === "right"; $("card-link").hidden = false; $("card-analyse").hidden = false;
+  }
+  function tally() {
+    const st = DATA.mine.map(statusOf), k = x => st.filter(y => y === x).length, tried = st.length - k("new");
+    $("card-record").innerHTML = tried ? `Your record in this browser: ${tried} of ${DATA.mine.length} positions tried, ${k("due") + k("retry")} due now, ${k("learnt")} learnt. <a href="#about-record">How it's saved</a>` : "";
+  }
+  // next card: due cards first (longest overdue first), then ones not tried yet, from the blunders the filters show
+  function nextCard() {
+    if (at < seen.length - 1) return showCard(seen[++at], false);
+    const pool = dots.filter(([a]) => a.style.display !== "none").map(([, d]) => d).filter(d => d !== current);
+    const now = Date.now(), due = pool.filter(d => { const b = boxOf(d); return b.box && b.due <= now && !seen.includes(d); }).sort((a, b) => boxOf(a).due - boxOf(b).due);
+    if (due.length) return openCard(due[0], false);
+    const fresh = pool.filter(d => !record[keyOf(d)]), from = fresh.length ? fresh : pool;
+    if (from.length) openCard(from[Math.floor(Math.random() * from.length)], false);
+  }
+  $("card-giveup").addEventListener("click", () => { if (!answered) remember(current, "gaveup"); reveal(null, "gaveup"); });
+  $("card-retry").addEventListener("click", () => ask("Try again (your first answer is the one recorded)."));
+  $("card-next").addEventListener("click", nextCard);
+  $("card-prev").addEventListener("click", () => { if (at > 0) showCard(seen[--at], false); });
+  // the record line links into the notes: open them first
+  $("card-record").addEventListener("click", ev => { if (ev.target.closest("a")) $("notes").open = true; });
+  // Learning: five boxes. A right answer moves a card up a box when it's due; a wrong one (or Show the answer) sends it to
+  // box 1. Each box has a wait before the card is due again; box 5 counts as learnt. The box is worked out from the kept
+  // answers each time, so changing the settings re-sorts every card at once. Settings are kept in this browser.
+  const LEARN = "blundermap-learning-v1", DAY = 86400000, STD = { gaps: [0, 1, 3, 7, 21], nearly: "wrong" };
+  let learn = { ...STD, gaps: [...STD.gaps] };
+  try { const l = JSON.parse(localStorage.getItem(LEARN)); if (l && Array.isArray(l.gaps) && l.gaps.length === 5) learn = { ...learn, ...l }; } catch (e) {}
+  const saveLearn = () => { try { localStorage.setItem(LEARN, JSON.stringify(learn)); } catch (e) {} };
+  const wait = box => (+learn.gaps[box - 1] || 0) * DAY;
+  // a record kept before the boxes had only counts: all right = one box up per right answer; last right = box 2; else box 1
+  function oldBox(r) { return r.right === r.n ? Math.min(5, 1 + r.n) : r.last === "right" ? 2 : 1; }
+  function boxOf(d) {
+    const r = record[keyOf(d)];
+    if (!r) return { box: 0, due: 0 };
+    let box = r.h ? r.b0 || 0 : oldBox(r), due = box ? (r.h ? r.t0 : r.at) + wait(box) : 0;
+    for (const [t, res] of r.h || []) {
+      const eff = res === "right" ? "right" : res === "close" ? learn.nearly : "wrong";
+      if (eff === "right") { if (!box || t >= due) box = Math.min(5, Math.max(box, 1) + 1); }
+      else if (eff === "wrong") box = 1;
+      else box = Math.max(box, 1);
+      due = t + wait(box);
+    }
+    return { box, due };
+  }
+  const today0 = () => new Date().setHours(0, 0, 0, 0);
+  function dueBand(d) {
+    const { box, due } = boxOf(d), t0 = today0(), now = Date.now();
+    return !box ? "none" : due <= now ? (due < t0 ? "overdue" : "today") : due < t0 + DAY ? "today" : due < t0 + 2 * DAY ? "tomorrow" : due < t0 + 7 * DAY ? "week" : "later";
+  }
+  function dueText(d) {
+    const { box, due } = boxOf(d), now = Date.now(), t0 = today0();
+    if (!box) return "not tried";
+    if (due <= now) return due < t0 ? "overdue" : "due now";
+    if (due < t0 + DAY) return "due later today";
+    if (due < t0 + 2 * DAY) return "due tomorrow";
+    return "due " + new Date(due).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  }
+  function boxLine(d) {
+    const r = record[keyOf(d)], { box } = boxOf(d);
+    $("card-box").hidden = false;
+    $("card-box").textContent = !r ? "New card: not tried yet" :
+      `Box ${box} of 5${box === 5 ? " (learnt)" : ""} · ${dueText(d)} · tried ${r.n}× (${r.right} right, ${r.n - r.right} not)`;
+  }
+  tally();
+
+  // "Your cards": every card in a list with filters, on a layer over the page. It only reads the record above.
+  const QN = ["Critical moment", "Careless", "Sharp + short of time", "Time-trouble slip"];
+  const quadOf = d => (d.pct >= 25 ? 0 : 2) + (d.good <= 2 ? 0 : 1);
+  function statusOf(d) {
+    const r = record[keyOf(d)], { box, due } = boxOf(d);
+    return !r ? "new" : due <= Date.now() ? (r.last === "right" ? "due" : "retry") : box === 5 ? "learnt" : "learning";
+  }
+  const ST = { new: "not tried", due: "due now", retry: "✗ to retry", learning: "learning", learnt: "✓ learnt" };
+  const lost = d => d.wb == null ? "?" : Math.round(d.wb - d.wa);
+  const cf = { status: "all", due: "any", box: new Set([1, 2, 3, 4, 5]), ph: new Set(Object.keys(PH)), cost: new Set([0, 1, 2]), q: new Set([0, 1, 2, 3]) };
+  let cardsMax = 50, layerPushed = false;
+  function chips(id, items, key) {
+    const box = $(id), multi = cf[key] instanceof Set;
+    box.innerHTML = "";
+    for (const [val, label] of items) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label;
+      if (multi) b.className = "toggle";
+      b.setAttribute("aria-pressed", multi ? cf[key].has(val) : cf[key] === val);
+      b.addEventListener("click", () => {
+        if (multi) cf[key].has(val) ? cf[key].delete(val) : cf[key].add(val); else cf[key] = val;
+        cardsMax = 50; drawCards();
+      });
+      box.appendChild(b);
+    }
+  }
+  function drawCards() {
+    const all = DATA.mine, n = (list, ...st) => list.filter(d => st.includes(statusOf(d))).length;
+    const tried = all.length - n(all, "new");
+    $("cards-sum").innerHTML = `<b>${all.length} cards</b> · ${tried} tried · ${n(all, "due", "retry")} due now (${n(all, "retry")} to retry) · ${n(all, "learning")} learning · ${n(all, "learnt")} learnt · ${n(all, "new")} not tried`;
+    // two separate views of the same cards: each block on its own adds up to all the cards
+    const groups = [["By game phase", Object.entries(PH).map(([k, v]) => [v[0], all.filter(d => d.ph === k)])],
+                    ["By quarter of the map", QN.map((q, i) => [q, all.filter(d => quadOf(d) === i)])]];
+    $("cards-split").innerHTML = `<tr><th></th><th>Cards</th><th>Tried</th><th>Due now</th><th>Learnt</th></tr>`
+      + groups.map(([title, rows]) => `<tr class="grp"><th colspan="5">${title} <span>· adds up to all ${all.length} cards</span></th></tr>`
+        + rows.map(([name, list]) => `<tr><td>${name}</td><td>${list.length}</td><td>${list.length - n(list, "new")}</td><td>${n(list, "due", "retry")}</td><td>${n(list, "learnt")}</td></tr>`).join("")).join("");
+    chips("cf-status", [["all", "All"], ["due", "Due now"], ["retry", "To retry"], ["new", "Not tried"], ["learning", "Learning"], ["learnt", "Learnt"]], "status");
+    const nd = b => all.filter(d => dueBand(d) === b).length;
+    chips("cf-due", [["any", "Any time"], ["overdue", `Overdue (${nd("overdue")})`], ["today", `Today (${nd("today")})`], ["tomorrow", `Tomorrow (${nd("tomorrow")})`], ["week", `This week (${nd("week")})`], ["later", `Later (${nd("later")})`]], "due");
+    chips("cf-box", [1, 2, 3, 4, 5].map(b => [b, `Box ${b} (${all.filter(d => boxOf(d).box === b).length})`]), "box");
+    chips("cf-ph", Object.entries(PH).map(([k, v]) => [k, v[0]]), "ph");
+    chips("cf-cost", BANDS.map((b, i) => [i, b[1] > 100 ? `${b[2]} ${b[0]}+` : `${b[2]} ${b[0]}–${b[1]}`]), "cost");
+    chips("cf-q", QN.map((q, i) => [i, q]), "q");
+    const sort = $("cf-sort").value, order = new Map(all.map((d, i) => [d, i]));
+    const tries = d => (record[keyOf(d)] || { n: 0 }).n, cost = d => d.wb == null ? -1 : d.wb - d.wa;
+    const dueKey = d => { const b = boxOf(d); return b.box ? b.due : Infinity; };
+    const statusOk = d => cf.status === "all" || statusOf(d) === cf.status || (cf.status === "due" && statusOf(d) === "retry");
+    const boxOk = d => { const b = boxOf(d).box; return b ? cf.box.has(b) : cf.due === "any"; };
+    const list = all.filter(d => statusOk(d) && boxOk(d) && (cf.due === "any" || dueBand(d) === cf.due) && cf.ph.has(d.ph) && cf.cost.has(band(d)) && cf.q.has(quadOf(d)))
+      .sort((a, b) => sort === "old" ? order.get(a) - order.get(b) : sort === "cost" ? cost(b) - cost(a) : sort === "tries" ? tries(b) - tries(a)
+        : sort === "box" ? (boxOf(a).box || 9) - (boxOf(b).box || 9) || dueKey(a) - dueKey(b)
+        : sort === "due" ? dueKey(a) - dueKey(b) || order.get(b) - order.get(a) : order.get(b) - order.get(a));
+    $("cards-count").textContent = list.length === all.length ? `Showing all ${all.length}` : `${list.length} of ${all.length} match`;
+    $("cards-list").innerHTML = list.slice(0, cardsMax).map(d => {
+      const st = statusOf(d), r = record[keyOf(d)], { box } = boxOf(d);
+      return `<div class="item" role="button" tabindex="0" data-i="${order.get(d)}"><div class="mini">${boardSVG(d.fen, d.p % 2, [], "Position before the blunder")}</div>
+        <div class="main"><div class="t1">${d.date} · move ${moveNo(d)} · ${PH[d.ph][0]}</div>
+        <div class="t2">lost ${lost(d)} pts · ${QN[quadOf(d)]} · clock ${clock(d)}</div></div>
+        <div class="st"><div class="st-${st}">${st === "learning" ? dueText(d) : ST[st]}</div><div>${r ? `box ${box} · ✓${r.right} ✗${r.n - r.right}` : ""}</div></div></div>`;
+    }).join("") || `<p class="sub">No cards match these filters.</p>`;
+    $("cards-more").hidden = list.length <= cardsMax;
+  }
+  function drawSettings() {
+    $("set-gaps").innerHTML = learn.gaps.map((g, i) => `<label>Box ${i + 1} <input type="number" min="0" max="365" step="1" value="${g}" data-box="${i}" aria-label="Days before a box ${i + 1} card is due again"> days</label>`).join("");
+    $("set-nearly").value = learn.nearly;
+  }
+  $("set-gaps").addEventListener("change", ev => {
+    const i = ev.target.dataset.box; if (i == null) return;
+    const v = Math.max(0, Math.min(365, Math.round(+ev.target.value) || 0));
+    learn.gaps[+i] = v; ev.target.value = v; saveLearn(); drawCards(); tally(); if (current) boxLine(current);
+  });
+  $("set-nearly").addEventListener("change", () => { learn.nearly = $("set-nearly").value; saveLearn(); drawCards(); tally(); if (current) boxLine(current); });
+  $("set-reset").addEventListener("click", () => { learn = { ...STD, gaps: [...STD.gaps] }; saveLearn(); drawSettings(); drawCards(); tally(); if (current) boxLine(current); });
+  function openCards() {
+    cardsMax = 50; drawCards(); drawSettings();
+    $("cards-layer").hidden = false; document.body.classList.add("layer-open");
+    try { history.pushState({ cards: true }, ""); layerPushed = true; } catch (e) { layerPushed = false; }
+    $("cards-close").focus();
+  }
+  function closeCards(fromBack) {
+    if ($("cards-layer").hidden) return;
+    $("cards-layer").hidden = true; document.body.classList.remove("layer-open");
+    if (layerPushed && !fromBack) { layerPushed = false; history.back(); } else layerPushed = false;
+  }
+  function pickFromList(el) {
+    const d = DATA.mine[+el.dataset.i];
+    closeCards(false);
+    openCard(d, false);
+    $("card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  $("cards-open").addEventListener("click", ev => { ev.preventDefault(); openCards(); });
+  $("cards-close").addEventListener("click", () => closeCards(false));
+  $("cards-back").addEventListener("click", () => closeCards(false));
+  $("cards-more").addEventListener("click", () => { cardsMax += 50; drawCards(); });
+  $("cf-sort").addEventListener("change", () => { cardsMax = 50; drawCards(); });
+  $("cards-list").addEventListener("click", ev => { const el = ev.target.closest(".item"); if (el) pickFromList(el); });
+  $("cards-list").addEventListener("keydown", ev => { const el = ev.target.closest(".item"); if (el && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); pickFromList(el); } });
+  addEventListener("keydown", ev => { if (ev.key === "Escape") closeCards(false); });
+  addEventListener("popstate", () => closeCards(true));
+
+  // quadrant labels with counts of the blunders shown
+  const tags = [];
+  const tag = (x, yy, title, hiClock, few) => {
+    el("text", { x, y: yy, "text-anchor": "end", class: "qlabel" }).textContent = title;
+    tags.push([el("text", { x, y: yy + 14, "text-anchor": "end", class: "qsub" }), hiClock, few]);
+  };
+  tag(qx - 8, T + 14, "Critical moment", true, true);
+  tag(L + PW - 8, T + 14, "Careless", true, false);
+  tag(qx - 8, qy + 18, "Sharp + short of time", false, true);
+  tag(L + PW - 8, qy + 18, "Time-trouble slip", false, false);
+  // labels go behind the dots, so a dot under a label is still seen and can be tapped
+  const firstDot = svg.querySelector(".dot");
+  const under = firstDot && [...svg.children].find(n => n.contains(firstDot));
+  if (under) svg.querySelectorAll(".qlabel, .qsub").forEach(t => svg.insertBefore(t, under));
+
+  const QUADS = [
+    ["Critical moment", true, true, "25%+ clock, only 1–2 good moves."],
+    ["Careless", true, false, "25%+ clock, 3+ good moves."],
+    ["Sharp + short of time", false, true, "Under 25% clock, 1–2 good moves."],
+    ["Time-trouble slip", false, false, "Under 25% clock, 3+ good moves."],
+  ];
+  // filters: game phase and points lost; a dot shows when both its phase and its band are on
+  const on = { opening: true, middle: true, end: true, s0: true, s1: true, s2: true };
+  const V = Object.fromEntries(DATA.quads.map(q => [q.name, q]));
+  function applyFilters() {
+    const shown = [];
+    for (const [a, d] of dots) { const vis = on[d.ph] && on["s" + band(d)]; a.style.display = vis ? "" : "none"; if (vis) shown.push(d); }
+    for (const [t, hiClock, few] of tags) {
+      const n = shown.filter(d => (d.pct >= 25) === hiClock && (d.good <= 2) === few).length;
+      t.textContent = shown.length ? `${n} · ${Math.round(100 * n / shown.length)}%` : "0";
+    }
+    // the 2×2 quadrant cards: counts, share and phase split of the blunders shown, plus the comparison words (all blunders)
+    document.getElementById("quads-mine").innerHTML = QUADS.map(([title, hiClock, few, desc]) => {
+      const qs = shown.filter(d => (d.pct >= 25) === hiClock && (d.good <= 2) === few);
+      const by = ph => qs.filter(d => d.ph === ph).length;
+      return `<div class="quad"><h3>${title}</h3><div class="num">${qs.length} <small>${shown.length ? Math.round(100 * qs.length / shown.length) : 0}% of the blunders shown</small></div><p>${desc}</p><p>Opening ${by("opening")} · Middlegame ${by("middle")} · Endgame ${by("end")}</p><p class="v v-${V[title].code}">${V[title].words}</p><p>${rates(V[title])}</p></div>`;
+    }).join("");
+  }
+  const counts = { opening: 0, middle: 0, end: 0, s0: 0, s1: 0, s2: 0 };
+  DATA.mine.forEach(d => { counts[d.ph]++; counts["s" + band(d)]++; });
+  const icon = { opening: '<circle cx="6" cy="6" r="4.5" class="mark open"/>', middle: '<path d="M6,0.5L11.2,10L0.8,10Z" class="mark middle"/>', end: '<rect x="1.8" y="1.8" width="8.4" height="8.4" rx="1" class="mark end"/>' };
+  document.getElementById("phase-legend").innerHTML = '<span>Phase:</span>' + ["opening", "middle", "end"].map(ph =>
+    `<button type="button" aria-pressed="true" data-f="${ph}"><svg viewBox="0 0 12 12" aria-hidden="true">${icon[ph]}</svg>${PH[ph][0]} ${counts[ph]}</button>`).join("");
+  document.getElementById("severity-legend").innerHTML = '<span>Win chance lost:</span>' + BANDS.map(([lo, hi, name], i) =>
+    `<button type="button" aria-pressed="true" data-f="s${i}">${name} <span class="lab">${hi > 100 ? lo + "+" : lo + "–" + hi}</span> ${counts["s" + i]}</button>`).join("");
+  document.querySelectorAll("#phase-legend button, #severity-legend button").forEach(b => b.addEventListener("click", () => {
+    const now = b.getAttribute("aria-pressed") !== "true";
+    b.setAttribute("aria-pressed", now); on[b.dataset.f] = now; applyFilters();
+  }));
+  applyFilters();
+  document.getElementById("greyscale").innerHTML = ALPHA.map(a => `<span style="background:rgba(var(--ink-rgb), ${a})"></span>`).join("");
+}
+
+function drawPhaseTable(DATA) {
+  const rows = ["opening", "middle", "end"].map(ph => {
+    const x = DATA.phases[ph], sw = { opening: "--ph-open", middle: "--ph-mid", end: "--ph-end" }[ph];
+    const per = x.mb ? `1 in ${Math.max(1, Math.round(x.mn / x.mb))}` : (x.mn ? "none" : "–");
+    const opp = x.ob ? `1 in ${Math.max(1, Math.round(x.on / x.ob))}` : (x.on ? "none" : "–");
+    return `<tr><td><span class="sw" style="background:var(${sw})"></span>${PH[ph][0]}</td><td>${x.mb}</td><td>${per}</td><td>${opp}</td><td class="v v-${x.code}">${x.words}</td></tr>`;
+  });
+  document.getElementById("phase-table").innerHTML =
+    `<thead><tr><th>Phase</th><th>Your blunders</th><th>How often you blundered</th><th>How often they did</th><th>Compared with your opponents</th></tr></thead><tbody>${rows.join("")}</tbody>`;
+}
+
+const perMove = (b, n) => b ? `1 in ${Math.max(1, Math.round(n / b))}` : "none";
+const rates = x => `You: ${perMove(x.mb, x.mn)} moves. Your opponents: ${x.on ? perMove(x.ob, x.on) : "no moves here"}.`;
+
+function drawFinding(DATA) {
+  const o = DATA.overall;
+  document.getElementById("finding").innerHTML =
+    `<p><b>Overall: ${o.words}.</b> You blundered ${o.mb} time${o.mb === 1 ? "" : "s"} in ${DATA.used} game${DATA.used === 1 ? "" : "s"}, `
+    + `1 in ${Math.max(1, Math.round(o.mn / (o.mb || 1)))} of your moves; your opponents ${perMove(o.ob, o.on)}.</p>`;
+}
+
+// how the moves spread over the clock: you (dark) and your opponents (grey), as a share of each side's moves
+function drawClock(DATA) {
+  const ROWS = ["Under 10%", "10–25%", "25–50%", "50–75%", "75–100%"];
+  const byRow = ROWS.map((_, ci) => DATA.cells.filter(x => x.c === ci).reduce((t, x) => (t.mn += x.mn, t.on += x.on, t), { mn: 0, on: 0 }));
+  const tm = DATA.overall.mn || 1, to = DATA.overall.on || 1;
+  const maxShare = Math.max(0.01, ...byRow.map(r => Math.max(r.mn / tm, r.on / to)));
+  const bar = (share, colour) => `<div class="bar"><span style="width:${(85 * share / maxShare).toFixed(1)}%;background:var(${colour})"></span>${Math.round(100 * share)}%</div>`;
+  document.getElementById("clock-bars").innerHTML = ROWS.map((r, ci) =>
+    `<div class="lab">${r} left</div><div class="pair">${bar(byRow[ci].mn / tm, "--you")}${bar(byRow[ci].on / to, "--opp")}</div>`).join("");
+  const lc = DATA.lowClock;
+  const yl = Math.round(100 * lc.you / (lc.youMoves || 1)), ol = Math.round(100 * lc.opp / (lc.oppMoves || 1));
+  document.getElementById("clock-sentence").textContent =
+    `${yl}% of your moves were made with under 10% of your clock left, against ${ol}% of your opponents' moves.`;
+}
+
+// --- start ---------------------------------------------------------------------------------------
+(function start() {
+  const SITE = { lichess: "Lichess", "chess.com": "Chess.com" }[DATA.site] || DATA.site;
+  document.getElementById("eyebrow").textContent = `Blunder map · ${DATA.user} on ${SITE} · ${DATA.monthName}`;
+  document.querySelectorAll(".site-name").forEach(e => e.textContent = SITE);
+  document.getElementById("title").textContent = `Your blunders in ${DATA.monthName}`;
+  document.title = `Blunder map · ${DATA.monthName}`;
+  document.getElementById("coverage").innerHTML = DATA.used === DATA.analysed
+    ? `<b>Based on your ${DATA.used} game${DATA.used === 1 ? "" : "s"} in ${DATA.monthName}${DATA.monthOpen ? " so far" : ""}.</b>`
+    : `<b>Based on ${DATA.used} of your ${DATA.analysed} games in ${DATA.monthName} so far.</b> The rest are still being worked on; ask again later for the full picture.`;
+  if (!DATA.used) {
+    document.querySelectorAll("section").forEach(e => e.hidden = true);
+    return;
+  }
+  drawDots(DATA); drawPhaseTable(DATA); drawFinding(DATA); drawClock(DATA);
+})();
+</script>
+</body></html>
