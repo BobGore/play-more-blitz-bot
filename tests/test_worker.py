@@ -405,6 +405,70 @@ def test_a_lost_connection_is_waited_out_and_tried_again():
     assert naps == [60, 60, 5]
 
 
+def test_a_stop_request_mid_batch_lets_the_batch_finish_and_report():
+    setup_queue(*[record("lichess", f"ggggggg{n}", "alice_example", "zed_example", n) for n in range(1, 24)])
+    http = FakeHttp()
+    http.lichess = {f"ggggggg{n}": li(RUY) for n in range(1, 24)}
+    asked = []
+
+    class AskedToStopDuringTheFirstBatch(Direct):
+        def claim(self, n):
+            jobs = super().claim(n)
+            asked.append(True)  # the STOP file appears while this batch is being analysed
+            return jobs
+
+    config = w.Config("user@host", "key", "sf", batch_size=10, nodes=1000)
+    w.serve(AskedToStopDuringTheFirstBatch(), http, FakeEngine(), config, stop=lambda: bool(asked), sleep=lambda s: None)
+    counts = q.status(NOW)["counts"]
+    assert len(asked) == 1  # no second batch claimed
+    assert counts["done"] == 10 and counts["pending"] == 13 and counts.get("claimed", 0) == 0  # nothing left hanging
+
+
+def test_nap_sleeps_the_full_time_when_not_asked_to_stop():
+    now, naps = [0.0], []
+
+    def sleep(s):
+        naps.append(s)
+        now[0] += s
+
+    w.nap(3.5, lambda: False, clock=lambda: now[0], sleep=sleep)
+    assert naps == [1.0, 1.0, 1.0, 0.5]
+
+
+def test_nap_wakes_within_a_step_once_asked_to_stop():
+    now, naps = [0.0], []
+
+    def sleep(s):
+        naps.append(s)
+        now[0] += s
+
+    w.nap(300, lambda: now[0] >= 2, clock=lambda: now[0], sleep=sleep)
+    assert naps == [1.0, 1.0]
+
+
+def test_main_stops_cleanly_on_a_stop_file_and_deletes_it(monkeypatch, tmp_path, caplog):
+    path = tmp_path / "worker.env"
+    path.write_text("GATEWAY_TARGET=u@h\nGATEWAY_KEY=/k\nSTOCKFISH_PATH=/sf\n", encoding="utf-8")
+    (tmp_path / w.STOP_FILE_NAME).write_text("", encoding="utf-8")
+    claims = []
+
+    class Idle(w.Gateway):
+        def hello(self):
+            return {"protocol": w.PROTOCOL, "method_version": analysis.METHOD_VERSION}
+
+        def claim(self, n):
+            claims.append(n)
+            return []
+
+    monkeypatch.setattr(w, "Gateway", Idle)
+    monkeypatch.setattr(w, "setup_logging", lambda path="": None)
+    with caplog.at_level(logging.INFO, logger=w.log.name):
+        assert w.main(["--config", str(path)]) == 0
+    assert claims == []  # asked to stop before it started: claims nothing
+    assert not (tmp_path / w.STOP_FILE_NAME).exists()
+    assert "stopped: asked to by the STOP file" in caplog.text
+
+
 def test_with_once_a_lost_connection_is_an_error_not_a_wait():
     class Down(Direct):
         def claim(self, n):
@@ -484,6 +548,21 @@ class Runner:
 
 def gateway(runner):
     return w.Gateway("user@host", "/keys/id", runner=runner, timeout=5)
+
+
+def test_on_windows_ssh_starts_without_a_console_window(monkeypatch):
+    monkeypatch.setattr(w, "NO_WINDOW", 0x08000000)  # CREATE_NO_WINDOW
+    runner = Runner('{"protocol": 1}\n')
+    gateway(runner).claim(1)
+    gateway(runner).submit([{"site": "lichess", "game_id": "x"}])
+    assert all(kwargs.get("creationflags") == 0x08000000 for _, kwargs, _ in runner.calls)
+
+
+def test_elsewhere_ssh_gets_no_window_flag(monkeypatch):
+    monkeypatch.setattr(w, "NO_WINDOW", 0)
+    runner = Runner('{"protocol": 1}\n')
+    gateway(runner).claim(1)
+    assert "creationflags" not in runner.calls[0][1]
 
 
 def test_the_ssh_command_is_a_list_with_the_request_as_its_last_argument_and_no_shell():
@@ -701,7 +780,7 @@ def test_the_engine_is_opened_when_first_needed_configured_and_asked_for_nodes(m
     limit, game = fake.analysed[0]
     assert limit.nodes == 50_000 and limit.time == 30.0 and game is token
     if os.name == "nt":
-        assert opened[0][1]["creationflags"] == subprocess.BELOW_NORMAL_PRIORITY_CLASS
+        assert opened[0][1]["creationflags"] == subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW  # low priority, no window
 
 
 def test_a_nodes_override_replaces_the_configured_budget_for_one_call(monkeypatch):
