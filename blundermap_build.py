@@ -38,6 +38,32 @@ def games_held(site, username, month, db_path=None):
         db.close()
 
 
+def counting_status(now, counts_path=None):
+    """How the counting queue stands, for !analysisq: the queue file beside blundermap.db (blundermap-queue.db), which
+    the counting gateway on this server keeps; read-only. None if the blunder map is off or there is no queue yet.
+    {"counts": {waiting, taken, counted, failed}, "taken_by": [(machine, games)], "last": [(machine, seconds ago, games
+    counted)] newest first, "oldest_waiting_seconds": seconds since the oldest waiting game was analysed, or None}."""
+    counts_path = counts_path or settings.BLUNDERMAP_DB
+    if not counts_path:
+        return None
+    path = Path(counts_path).with_name("blundermap-queue.db")
+    if not path.exists():
+        return None
+    db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        counts = {"waiting": 0, "taken": 0, "counted": 0, "failed": 0}
+        counts.update(db.execute("SELECT status, count(*) FROM count_queue GROUP BY status").fetchall())
+        taken_by = db.execute("SELECT taken_by, count(*) FROM count_queue WHERE status = 'taken' GROUP BY taken_by "
+                              "ORDER BY taken_by").fetchall()
+        last = [(m, now - at, n) for m, at, n in db.execute(
+            "SELECT machine, max(at), counted FROM runs WHERE verb = 'take_in' GROUP BY machine ORDER BY max(at) DESC")]
+        oldest = db.execute("SELECT min(analysed_at) FROM count_queue WHERE status = 'waiting'").fetchone()[0]
+    finally:
+        db.close()
+    return {"counts": counts, "taken_by": taken_by, "last": last,
+            "oldest_waiting_seconds": None if oldest is None else max(0, now - oldest)}
+
+
 def file_name(site, username, month):
     return re.sub(r"[^A-Za-z0-9._-]", "_", f"blundermap_{site}_{username}_{month}") + ".html"
 

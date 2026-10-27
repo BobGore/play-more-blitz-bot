@@ -261,3 +261,62 @@ def test_an_admin_gets_a_members_map_and_the_member_is_not_told(sent):
 def test_the_commands_are_dm_only_and_blundermapfor_is_for_admins():
     assert "blundermap" in botmod.DM_COMMANDS and "blundermapfor" in botmod.ADMIN_DM_COMMANDS
     assert "blundermap" in botmod.USAGE and "blundermapfor" in botmod.USAGE
+
+
+# --- the counting queue in !analysisq -----------------------------------------------------------------------------------------------
+
+QUEUE_SCHEMA = """
+CREATE TABLE count_queue (site TEXT, game_id TEXT, month TEXT, analysed_at INTEGER, status TEXT, taken_by TEXT, taken_at INTEGER,
+                          tries INTEGER, last_error TEXT, updated_at INTEGER, PRIMARY KEY (site, game_id));
+CREATE TABLE runs (id INTEGER PRIMARY KEY, machine TEXT, verb TEXT, at INTEGER, seconds REAL, queued INTEGER, games INTEGER,
+                   counted INTEGER, failed INTEGER, released INTEGER, refused INTEGER, note TEXT);
+"""
+
+
+def a_queue(counts_path):
+    """A counting queue beside blundermap.db, as the counting gateway keeps it: 3 waiting, 3 being counted by two machines,
+    2 counted, 1 failed; fish4 sent counts 10 minutes ago, fish2 an hour ago."""
+    db = sqlite3.connect(counts_path.with_name("blundermap-queue.db"))
+    db.executescript(QUEUE_SCHEMA)
+    rows = [("w1", NOW - 7200, "waiting", None), ("w2", NOW - 600, "waiting", None), ("w3", NOW - 60, "waiting", None),
+            ("t1", NOW - 900, "taken", "fish4"), ("t2", NOW - 900, "taken", "fish2"), ("t3", NOW - 900, "taken", "fish2"),
+            ("c1", NOW - 9000, "counted", None), ("c2", NOW - 9000, "counted", None), ("f1", NOW - 9000, "failed", None)]
+    db.executemany("INSERT INTO count_queue VALUES ('lichess', ?, '2026-09', ?, ?, ?, NULL, 0, NULL, 0)", rows)
+    db.executemany("INSERT INTO runs (machine, verb, at, seconds, games, counted) VALUES (?, ?, ?, 1, ?, ?)",
+                   [("fish2", "take_in", NOW - 3600, 20, 20), ("fish4", "take_in", NOW - 1200, 10, 9),
+                    ("fish4", "take_in", NOW - 600, 10, 10), ("fish4", "hand_out", NOW - 590, 10, 0)])
+    db.commit()
+    db.close()
+
+
+def test_the_counting_queue_is_read_and_drawn_for_the_admin(isolated):
+    assert bm.counting_status(NOW) is None                                   # no queue file yet
+    a_queue(isolated)
+    status = bm.counting_status(NOW)
+    assert status["counts"] == {"waiting": 3, "taken": 3, "counted": 2, "failed": 1}
+    assert status["taken_by"] == [("fish2", 2), ("fish4", 1)]
+    assert status["last"] == [("fish4", 600, 10), ("fish2", 3600, 20)] and status["oldest_waiting_seconds"] == 7200
+    text = botmod.render_analysis.render_counting_status(status)
+    assert text.startswith("**Blunder map counting**")
+    assert "Being counted        3   (fish2 2, fish4 1)" in text and "Counter fish4: last sent counts 10 min ago (10 games)" in text
+    assert "⚠" not in text
+
+
+def test_counting_that_has_stalled_is_flagged(isolated):
+    a_queue(isolated)
+    later = bm.counting_status(NOW + 4 * 3600)
+    assert "⚠ No counts have come in for 4 h 10 min." in botmod.render_analysis.render_counting_status(later)
+    assert botmod.render_analysis.render_counting_status(None) == ""
+
+
+def test_analysisq_adds_the_counting_queue_when_the_map_is_on(isolated, monkeypatch):
+    a_queue(isolated)
+    monkeypatch.setattr(botmod, "datetime", SimpleNamespace(now=lambda tz=None: SimpleNamespace(timestamp=lambda: NOW)))
+    ctx = make_ctx(ADMIN)
+    asyncio.run(botmod.analysisq.callback(ctx))
+    text = said(ctx)[0]
+    assert "**Analysis queue**" in text and "**Blunder map counting**" in text and len(text) < 2000
+    monkeypatch.setattr(settings, "BLUNDERMAP_DB", "")
+    ctx = make_ctx(ADMIN)
+    asyncio.run(botmod.analysisq.callback(ctx))
+    assert "Blunder map counting" not in said(ctx)[0]

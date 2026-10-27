@@ -9,6 +9,7 @@ import contextlib
 import io
 import logging
 import os
+import sqlite3
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -1779,9 +1780,19 @@ async def sync_slash_commands():
 @bot.command(name="analysisq", aliases=["analysisqueue"])
 @commands.check(_admin_only)
 async def analysisq(ctx):
-    """Admins only: how the analysis queue stands, and whether the worker is asking for work."""
-    status = await asyncio.to_thread(analysis_queue.status, int(datetime.now(timezone.utc).timestamp()), analysis.METHOD_VERSION)
-    await ctx.send(render_analysis.render_queue_status(status, settings.ANALYSIS_ENABLED))
+    """Admins only: how the analysis queue stands, and whether the worker is asking for work; then, if the blunder map is
+    on, how its counting queue stands (the counting machines work outside the bot)."""
+    now = int(datetime.now(timezone.utc).timestamp())
+    status = await asyncio.to_thread(analysis_queue.status, now, analysis.METHOD_VERSION)
+    text = render_analysis.render_queue_status(status, settings.ANALYSIS_ENABLED)
+    try:
+        counting = await asyncio.to_thread(blundermap_build.counting_status, now)
+    except sqlite3.Error:
+        log.exception("couldn't read the blunder map's counting queue")
+        counting = None
+    if counting is not None:
+        text += "\n" + render_analysis.render_counting_status(counting)
+    await ctx.send(text)
 
 
 _queuemonth_lock = asyncio.Lock()

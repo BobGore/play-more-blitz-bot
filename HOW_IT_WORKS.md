@@ -233,7 +233,10 @@ a whitelist of settings from `.env` and never the Discord token. No shell. The w
 **Consumers.** `analysis_reports.py` reads the table (`player_games`, `month_summary`, `monthly_accuracy`,
 `waiting_count`) and `render_analysis.py` turns it into text (`!lastgame`, the analysis block of `!mystats`, `!analysisq`,
 `!gamestate`). `!analysisq` (admin, DM) shows counts by status, the low-priority backlog, how long the oldest game has
-waited, when each worker last asked, and how many games await a re-run. `!gamestate <game link or id>` (admin, DM) is
+waited, when each worker last asked, and how many games await a re-run; with the blunder map on, it adds the counting
+queue too (`blundermap_build.counting_status`, read-only from `blundermap-queue.db` beside `BLUNDERMAP_DB`): waiting, being
+counted and by which machine, counted, failed, and when each counting machine last sent counts, with a ⚠ when games wait
+and none have come in for 3 hours. `!gamestate <game link or id>` (admin, DM) is
 the queue-wide equivalent for one game instead of the whole queue: `obit.candidates` reads the link/id the same way
 `!obit` does, `obit.game_row` fetches the row for anyone's game (not just the caller's own, unlike `obit.find_game`),
 and `render_analysis.render_gamestate` prints every column - status, priority, attempts, `last_error`, the queued/

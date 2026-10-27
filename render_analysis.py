@@ -147,6 +147,36 @@ def render_queue_status(status, enabled):
     return text
 
 
+STALE_COUNTING_SECONDS = 3 * 3600  # games waiting and no counts delivered for this long: say so
+
+
+def render_counting_status(status):
+    """The blunder map's counting queue for !analysisq, from blundermap_build.counting_status(); "" when there is none.
+    The counting machines work outside the bot, so this is the bot's only view of them."""
+    if status is None:
+        return ""
+    c = status["counts"]
+    being = ", ".join(f"{machine} {n}" for machine, n in status["taken_by"])
+    lines = [
+        f"Waiting         {c['waiting']:>6,}",
+        f"Being counted   {c['taken']:>6,}" + (f"   ({being})" if being else ""),
+        f"Counted         {c['counted']:>6,}",
+        f"Failed          {c['failed']:>6,}",
+    ]
+    if status["oldest_waiting_seconds"] is not None:
+        lines.append(f"Oldest waiting game: analysed {duration(status['oldest_waiting_seconds'])} ago")
+    for machine, seconds, n in status["last"]:
+        lines.append(f"Counter {machine}: last sent counts {duration(seconds)} ago ({n} games)")
+    text = "**Blunder map counting**\n```\n" + "\n".join(lines) + "\n```"
+    newest = min((s for _, s, _ in status["last"]), default=None)
+    if c["waiting"] or c["taken"]:
+        if newest is None:
+            text += "\n⚠ Games are waiting but no counting machine has sent any counts yet."
+        elif newest > STALE_COUNTING_SECONDS:
+            text += f"\n⚠ No counts have come in for {duration(newest)}."
+    return text
+
+
 def _when(ts):
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
