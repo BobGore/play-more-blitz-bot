@@ -212,7 +212,7 @@ queued is left alone (safe to offer again).
 | `done` → `claimed` → `done` | **re-run**: once nothing else waits, the claim also hands out `done` games analysed by an older `method_version`, so a method change re-analyses everything, newest first. The old figures stay in place until the new ones replace them (so "analysed" means "has figures", i.e. `analysed_at` is set, not "status is done"). |
 
 **Priority −1 (urgent)** is only ever set by `analysis_queue.prioritise`, from `!obit`/`/obit`. An urgent game is
-claimed on its own, and never by a worker named in `ANALYSIS_SLOW_WORKERS` (fish4, a slow Arm core, took 4 minutes over
+claimed on its own, and never by a worker named in `ANALYSIS_SLOW_WORKERS` (a single slow core can take minutes over
 one review): those workers take only normal and low games, so the review waits seconds for a faster worker instead.
 
 **Validation (step 8).** `analysis_queue.submit` rejects a result whose figures are out of range, whose `evals` length
