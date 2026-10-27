@@ -78,7 +78,7 @@ USAGE = {
     "history": "!history [username] [site]",
     "lastgame": "!lastgame [username] [site]",
     "obit": "!obit [game link or id]",
-    "export": "!export [summary] [period]",
+    "export": "!export [summary] [period] [site]",
     "backfill": "!backfill <month>",
     "myhistory": "!myhistory [site]",
     "usage": "!usage [days]",
@@ -87,8 +87,8 @@ USAGE = {
     "backfillfor": "!backfillfor <username> <month> [site]",
     "gamestate": "!gamestate <game link or id>",
     "obitfor": "!obitfor <game link or id> [username]",
-    "blundermap": "!blundermap [month]",
-    "blundermapfor": "!blundermapfor <username> [month] [site]",
+    "blundermap": "!blundermap [month] [site]",
+    "blundermapfor": "!blundermapfor <username> [site] [month]",
 }
 
 intents = discord.Intents.default()
@@ -1344,21 +1344,25 @@ EXPORT_GAP_SECONDS = 30  # between one person's exports
 _exports = {}  # user id -> when they last had an export (monotonic seconds)
 
 
-async def _export_flow(user_id, what, period_text):
+async def _export_flow(user_id, what, period_text, site=None):
     """!export and /export up to sending (see _export_steps); notes in the log when a request is refused, without the reason
     (which may quote what the person typed)."""
-    parts, error = await _export_steps(user_id, what, period_text)
+    parts, error = await _export_steps(user_id, what, period_text, site)
     log.info("export request from %s (%s): %s", user_id, what, "refused" if error else f"{sum(1 for p in parts if 'data' in p)} file(s) ready")
     return parts, error
 
 
-async def _export_steps(user_id, what, period_text):
+async def _export_steps(user_id, what, period_text, site=None):
     """Everything !export and /export do, up to sending. Returns (parts, error): `parts` is a list with one dict per account
-    (the unit is a username on a site) of "text" and, unless that account had no games, "filename" and "data" (the CSV);
-    `error` is text saying why not."""
+    (the unit is a username on a site; only the `site` one if it is given) of "text" and, unless that account had no games,
+    "filename" and "data" (the CSV); `error` is text saying why not."""
     accounts = await asyncio.to_thread(store.accounts_of, user_id)
     if not accounts:
         return None, "you haven't added an account yet - use `!add <username> <site>` in the server's channel first"
+    if site is not None:
+        accounts = [a for a in accounts if a.site == site]
+        if not accounts:
+            return None, _no_account_on(site)
     current = sources.current_month()
     period = export_data.parse_period(period_text, current, time.time())
     if period is None:
@@ -1407,6 +1411,18 @@ async def _dm_parts(user_id, parts):
     await _count(usage_stats.EXPORT_SENT)
 
 
+def _take_site(*words):
+    """(site, the other words) from a command's optional words, which may come in any order: `chess.com` or `lichess`, in
+    any capitals, is the site (None if there is none); the other words keep their order."""
+    words = [w for w in words if w]
+    sites = [w.lower() for w in words if w.lower() in sources.SITES]
+    return (sites[0] if sites else None), [w for w in words if w.lower() not in sources.SITES]
+
+
+def _no_account_on(site):
+    return f"you have no {render.SITE_NAMES.get(site, site)} account on the list"
+
+
 def _export_args(first, second):
     """("summary" or "games", period text or None) from the two optional words after !export, in either order."""
     words = [w for w in (first, second) if w]
@@ -1416,10 +1432,11 @@ def _export_args(first, second):
 
 
 @bot.command(name="export")
-async def export_command(ctx, first: Optional[str] = None, second: Optional[str] = None):
+async def export_command(ctx, first: Optional[str] = None, second: Optional[str] = None, third: Optional[str] = None):
     """Your own games as CSV files for a spreadsheet, one file per account, sent in this conversation. Direct messages only,
     and only for a registered member who is on the server. `!export [period]`, or `!export summary [period]` for one line per
-    account. The period is this month (the default), `last`, `week` (the last seven days), a month like `2026-08`, or `all`."""
+    account. The period is this month (the default), `last`, `week` (the last seven days), a month like `2026-08`, or `all`.
+    A site (`chess.com` or `lichess`) anywhere among the words gives that account only."""
     if not _in_dm(ctx):
         try:
             await ctx.send(EXPORT_HINT, delete_after=TEXT_STAYS_SECONDS)
@@ -1427,7 +1444,9 @@ async def export_command(ctx, first: Optional[str] = None, second: Optional[str]
             log.warning("couldn't send a reply in channel %s (%s)", ctx.channel.id, exc.status)
         return
     status = await _member_status(ctx.author.id)
-    parts, error = (None, _not_a_member_text(status)) if status is not True else await _export_flow(ctx.author.id, *_export_args(first, second))
+    site, words = _take_site(first, second, third)
+    parts, error = ((None, _not_a_member_text(status)) if status is not True
+                    else await _export_flow(ctx.author.id, *_export_args(*(words + [None, None])[:2]), site))
     if error is None:
         try:
             await _dm_parts(ctx.author.id, parts)
@@ -1542,11 +1561,14 @@ async def _blundermap_start(ctx, accounts, month, *, whose=None):
 
 
 @bot.command(name="blundermap")
-async def blundermap_command(ctx, month: Optional[str] = None):
+async def blundermap_command(ctx, first: Optional[str] = None, second: Optional[str] = None):
     """Your blunder map for a month (this month by default): a page to open in a browser showing where your blunders happen
     (how much time you had, how many good moves there were) compared with your opponents, with a flashcard for each
-    blunder. One file per account, sent in this conversation. Direct messages only, for registered members who are on the
-    server; while it is being tried out only for BLUNDERMAP_USERS. Each month's map is made at most once an hour for a member."""
+    blunder. One file per account (or only the account on a site given before or after the month), sent in this
+    conversation. Direct messages only, for registered members who are on the server; while it is being tried out only for
+    BLUNDERMAP_USERS. Each month's map is made at most once an hour for a member."""
+    site, words = _take_site(first, second)
+    month = words[0] if words else None
     if not _in_dm(ctx):
         try:
             await ctx.send(BLUNDERMAP_HINT, delete_after=TEXT_STAYS_SECONDS)
@@ -1567,6 +1589,11 @@ async def blundermap_command(ctx, month: Optional[str] = None):
     if not accounts:
         await _reject(ctx, "you haven't added an account yet - use `!add <username> <site>` in the server's channel first")
         return
+    if site is not None:
+        accounts = [a for a in accounts if a.site == site]
+        if not accounts:
+            await _reject(ctx, _no_account_on(site))
+            return
     chosen = await _month_or_reject(ctx, month, sources.current_month())
     if chosen is None:
         return
@@ -1585,9 +1612,12 @@ async def blundermap_command(ctx, month: Optional[str] = None):
 
 @bot.command(name="blundermapfor")
 @commands.check(_admin_only)
-async def blundermapfor(ctx, username: str, month: Optional[str] = None, site: Optional[str] = None):
-    """Admins only, in a direct message: any registered player's blunder map for a month, sent to the admin - for example
-    to look at a member's map before they ask. Read-only, and the member isn't told."""
+async def blundermapfor(ctx, username: str, first: Optional[str] = None, second: Optional[str] = None):
+    """Admins only, in a direct message: any registered player's blunder map for a month (this month by default), sent to
+    the admin - for example to look at a member's map before they ask. The site and the month may come in either order.
+    Read-only, and the member isn't told."""
+    site, words = _take_site(first, second)
+    month = words[0] if words else None
     if not settings.BLUNDERMAP_DB:
         await _reject(ctx, "the blunder map is switched off (`BLUNDERMAP_DB`)")
         return

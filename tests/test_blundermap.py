@@ -258,6 +258,47 @@ def test_an_admin_gets_a_members_map_and_the_member_is_not_told(sent):
     assert user == ADMIN and "9 of alice_example's 11 analysed games" in parts[0]["text"]
 
 
+def alice_on_both_sites():
+    register("alice_example")
+    register("alice_cc", site="chess.com")
+    analysed(spec(1, "alice_example", "x_example"), spec(2, "y_example", "alice_cc", site="chess.com"))
+
+
+def test_with_two_accounts_both_maps_come_unless_a_site_is_given(sent):
+    alice_on_both_sites()
+    run(botmod.blundermap_command, make_ctx())
+    assert sorted(sent["built"]) == [("chess.com", "alice_cc", MONTH), ("lichess", "alice_example", MONTH)]
+    for args in (("lichess",), ("LICHESS",), ("september", "lichess"), ("lichess", "2026-09")):
+        sent["built"].clear()
+        botmod._blundermaps.clear()
+        run(botmod.blundermap_command, make_ctx(), *args)
+        assert sent["built"] == [("lichess", "alice_example", MONTH)], args
+    sent["built"].clear()
+    run(botmod.blundermap_command, make_ctx(), "chess.com", "august")
+    assert sent["built"] == [] and sent["dm"][-1][1] == [{"text": "`alice_cc` · Chess.com: no analysed games held for August 2026, so there's no map."}]
+
+
+def test_a_site_with_no_account_is_refused(sent):
+    alice_with_games()
+    ctx = make_ctx()
+    run(botmod.blundermap_command, ctx, "chess.com")
+    assert reactions(ctx) == [NO] and said(ctx) == ["you have no Chess.com account on the list"] and sent["built"] == []
+
+
+def test_blundermapfor_takes_the_site_and_month_in_either_order(sent):
+    register("alice_example")
+    register("alice_example", site="chess.com")  # the same name on both sites, so the site decides
+    analysed(spec(1, "alice_example", "x_example"), spec(2, "y_example", "alice_example", site="chess.com"))
+    for args in (("chess.com",), ("chess.com", "september"), ("september", "chess.com"), ("2026-09", "Chess.com")):
+        sent["built"].clear()
+        ctx = make_ctx(ADMIN)
+        run(botmod.blundermapfor, ctx, "alice_example", *args)
+        assert reactions(ctx) == [WAIT] and sent["built"] == [("chess.com", "alice_example", MONTH)], args
+    ctx = make_ctx(ADMIN)
+    run(botmod.blundermapfor, ctx, "alice_example", "august")  # a month alone, for a name on two sites: which one?
+    assert reactions(ctx) == [NO]
+
+
 def test_the_commands_are_dm_only_and_blundermapfor_is_for_admins():
     assert "blundermap" in botmod.DM_COMMANDS and "blundermapfor" in botmod.ADMIN_DM_COMMANDS
     assert "blundermap" in botmod.USAGE and "blundermapfor" in botmod.USAGE

@@ -446,6 +446,27 @@ def test_one_person_exports_once_every_half_minute_and_someone_elses_wait_is_the
     assert flow()[1] is None
 
 
+def test_a_site_word_is_taken_out_wherever_it_is():
+    take = botmod._take_site
+    assert take(None, None) == (None, []) and take("last", None) == (None, ["last"])
+    assert take("lichess", "summary", "week") == ("lichess", ["summary", "week"])
+    assert take("summary", "Chess.com", "week") == ("chess.com", ["summary", "week"]) and take("week", None, "LICHESS") == ("lichess", ["week"])
+
+
+def test_an_export_for_one_site_sends_that_account_only():
+    two_accounts()
+    parts, error = asyncio.run(botmod._export_flow(ALICE, "games", None, "chess.com"))
+    assert error is None and len(parts) == 1 and parts[0]["text"].startswith("`alice_cc` · Chess.com")
+    botmod._exports.clear()
+    parts, error = asyncio.run(botmod._export_flow(ALICE, "games", None))
+    assert error is None and len(parts) == 2
+
+
+def test_an_export_for_a_site_with_no_account_says_so():
+    register("alice_example")
+    assert asyncio.run(botmod._export_flow(ALICE, "games", None, "chess.com")) == (None, "you have no Chess.com account on the list")
+
+
 def test_the_words_after_export_may_come_in_either_order():
     args = botmod._export_args
     assert args(None, None) == ("games", None) and args("last", None) == ("games", "last") and args("summary", None) == ("summary", None)
@@ -670,5 +691,5 @@ def test_help_and_readme_describe_export():
     text = said(ctx)[0]
     assert "`/export [period] [what]`" in text and "Or `!export` by DM" in text and len(text) < 2000
     readme = open(botmod.__file__.replace("bot.py", "README.md"), encoding="utf-8").read()
-    assert "`!export [summary] [period]`" in readme and "`/export [period] [what]`" in readme
-    assert botmod.USAGE["export"] == "!export [summary] [period]"
+    assert "`!export [summary] [period] [site]`" in readme and "`/export [period] [what]`" in readme
+    assert botmod.USAGE["export"] == "!export [summary] [period] [site]"
