@@ -148,6 +148,7 @@ setting that is present but not valid (say `GOB_TARGET=lots`) stops the bot at s
 | `ANALYSIS_MAX_GAMES` | Games from there up to this number go to the back of the analysis queue; beyond it they are not analysed. | 1000 |
 | `ANALYSIS_CLAIM_MINUTES` | How long the analysis worker has to finish a game before it goes back in the queue. | 30 |
 | `ANALYSIS_MAX_ATTEMPTS` | Tries before a game that keeps failing is given up on. | 5 |
+| `ANALYSIS_SLOW_WORKERS` | Workers never handed a game a member is waiting for (names separated by commas), so reviews go to the faster ones. | none |
 | `BLUNDERMAP_DB` | The blunder map's good-move counts (`blundermap.db`), which the counting machines fill outside the bot; the bot only reads it. Empty means `!blundermap` is off. | empty |
 | `BLUNDERMAP_USERS` | Discord IDs of the members who may use `!blundermap` while it is being tried out (admins always may). | none |
 | `BLUNDERMAP_EVERYONE` | Open `!blundermap` to every member (yes or no). | no |

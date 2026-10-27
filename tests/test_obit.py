@@ -2,6 +2,10 @@
 result, the review itself, and the command and its delivery by DM, run against a fake Discord context."""
 
 import asyncio
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,6 +33,7 @@ WAITING = "Analysing that game now: it's at the front of the queue. I'll DM you 
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(settings, "ANALYSIS_ENABLED", True)
+    monkeypatch.setattr(settings, "ANALYSIS_SLOW_WORKERS", frozenset())
     botmod._lookups.clear()
     monkeypatch.setitem(botmod._slash, "synced", False)
 
@@ -199,6 +204,45 @@ def test_two_requested_games_go_to_two_workers_one_each():
     assert [g["game_id"] for g in q.claim("desk", 20, NOW)] == ["00000002"]
     assert [g["game_id"] for g in q.claim("fish2", 20, NOW)] == ["00000001"]
     assert [g["game_id"] for g in q.claim("desk", 20, NOW)] == ["00000003"]
+
+
+def test_a_slow_worker_is_never_handed_a_requested_game(monkeypatch):
+    monkeypatch.setattr(settings, "ANALYSIS_SLOW_WORKERS", frozenset({"fish4"}))
+    register("alice_example")
+    q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2, 3)], NOW)
+    q.prioritise("lichess", "00000001")
+    assert [g["game_id"] for g in q.claim("fish4", 20, NOW)] == ["00000003", "00000002"]       # the normal games only
+    assert statuses()["00000001"][0] == q.PENDING
+    assert [g["game_id"] for g in q.claim("desk", 20, NOW)] == ["00000001"]                      # waits for a faster worker
+
+
+def test_a_slow_worker_with_only_a_requested_game_waiting_gets_nothing(monkeypatch):
+    monkeypatch.setattr(settings, "ANALYSIS_SLOW_WORKERS", frozenset({"fish4"}))
+    register("alice_example")
+    q.queue_games([spec(1, "alice_example", "x_example")], NOW)
+    q.prioritise("lichess", "00000001")
+    assert q.claim("fish4", 20, NOW) == []
+    assert [g["game_id"] for g in q.claim("fish2", 20, NOW)] == ["00000001"]
+
+
+def test_a_requested_game_in_a_slow_workers_batch_is_taken_back_for_a_faster_one(monkeypatch):
+    monkeypatch.setattr(settings, "ANALYSIS_SLOW_WORKERS", frozenset({"fish4"}))
+    register("alice_example")
+    q.queue_games([spec(n, "alice_example", "x_example") for n in (1, 2)], NOW)
+    assert len(q.claim("fish4", 20, NOW)) == 2
+    assert q.prioritise("lichess", "00000001") == (q.PENDING, None)
+    assert q.claim("fish4", 20, NOW + 5) == []
+    assert [g["game_id"] for g in q.claim("desk", 20, NOW + 5)] == ["00000001"]
+
+
+def test_slow_workers_are_read_as_names_separated_by_commas():
+    code = "import settings; print(sorted(settings.ANALYSIS_SLOW_WORKERS))"
+    base = {k: v for k, v in os.environ.items() if k not in settings.NAMES}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=Path(settings.__file__).parent,
+                         env={**base, "ANALYSIS_SLOW_WORKERS": " fish4, slowpi ,"})
+    assert out.stdout.strip() == "['fish4', 'slowpi']", out.stderr
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=Path(settings.__file__).parent, env=base)
+    assert out.stdout.strip() == "[]", out.stderr
 
 
 def test_a_claim_still_hands_out_only_what_a_worker_needs():

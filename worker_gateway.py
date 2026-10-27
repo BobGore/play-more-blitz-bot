@@ -34,7 +34,7 @@ WORKER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 # The settings the queue functions use. Nothing else is read from .env, so the Discord token never reaches this program.
 ENV_NAMES = ("PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT", "ANALYSIS_FULL_PRIORITY_GAMES", "ANALYSIS_MAX_GAMES",
-             "ANALYSIS_CLAIM_MINUTES", "ANALYSIS_MAX_ATTEMPTS")
+             "ANALYSIS_CLAIM_MINUTES", "ANALYSIS_MAX_ATTEMPTS", "ANALYSIS_SLOW_WORKERS")
 
 
 class Refused(Exception):

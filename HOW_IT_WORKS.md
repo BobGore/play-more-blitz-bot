@@ -211,7 +211,9 @@ queued is left alone (safe to offer again).
 | `failed` or `skipped: over_monthly_limit` → `pending`, priority −1 | a member asked for that game's review (`prioritise`): an explicit request overrides the limit and retries a failure |
 | `done` → `claimed` → `done` | **re-run**: once nothing else waits, the claim also hands out `done` games analysed by an older `method_version`, so a method change re-analyses everything, newest first. The old figures stay in place until the new ones replace them (so "analysed" means "has figures", i.e. `analysed_at` is set, not "status is done"). |
 
-**Priority −1 (urgent)** is only ever set by `analysis_queue.prioritise`, from `!obit`/`/obit`.
+**Priority −1 (urgent)** is only ever set by `analysis_queue.prioritise`, from `!obit`/`/obit`. An urgent game is
+claimed on its own, and never by a worker named in `ANALYSIS_SLOW_WORKERS` (fish4, a slow Arm core, took 4 minutes over
+one review): those workers take only normal and low games, so the review waits seconds for a faster worker instead.
 
 **Validation (step 8).** `analysis_queue.submit` rejects a result whose figures are out of range, whose `evals` length
 doesn't match `plies`, or whose moments don't agree with the side's counts (each side's list must have exactly as many

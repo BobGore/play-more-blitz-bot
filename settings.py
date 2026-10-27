@@ -149,6 +149,9 @@ if ANALYSIS_FULL_PRIORITY_GAMES > ANALYSIS_MAX_GAMES:
                      f"({ANALYSIS_MAX_GAMES}) are not valid: the first can't be larger than the second.")
 ANALYSIS_CLAIM_MINUTES = whole_number("ANALYSIS_CLAIM_MINUTES", 30)  # a claimed game not finished by then goes back in the queue
 ANALYSIS_MAX_ATTEMPTS = whole_number("ANALYSIS_MAX_ATTEMPTS", 5)  # tries before a game is marked failed
+# Workers too slow to analyse a game a member is waiting for (names as in authorized_keys, separated by commas): they
+# are never handed an urgent game, so a review waits a few seconds for a faster worker instead of minutes for these.
+ANALYSIS_SLOW_WORKERS = frozenset(w for w in text("ANALYSIS_SLOW_WORKERS").replace(" ", "").split(",") if w)
 
 # --- The blunder map (!blundermap) -------------------------------------------------------------------
 
@@ -196,5 +199,6 @@ NAMES = (
     "REQUEST_TIMEOUT_SECONDS", "MONTH_TIMEOUT_SECONDS", "MONTH_STALL_SECONDS", "LICHESS_EXPORT_MIN_INTERVAL",
     "PLAYMOREBLITZ_DB", "DB_LOCK_TIMEOUT", "BACKUP_DIR", "BACKUP_KEEP_DAYS",
     "ANALYSIS_ENABLED", "ANALYSIS_FULL_PRIORITY_GAMES", "ANALYSIS_MAX_GAMES", "ANALYSIS_CLAIM_MINUTES", "ANALYSIS_MAX_ATTEMPTS",
+    "ANALYSIS_SLOW_WORKERS",
     "BLUNDERMAP_DB", "BLUNDERMAP_USERS", "BLUNDERMAP_EVERYONE",
 )

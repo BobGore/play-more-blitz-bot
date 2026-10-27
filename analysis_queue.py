@@ -91,7 +91,8 @@ def queue_games(games, now):
 
 def claim(worker, limit, now, rerun_below=None):
     """Hand `worker` up to `limit` games to analyse: normal priority before low, and newest first within each. A game
-    whose review a member is waiting for (URGENT) is handed out on its own, since a worker reports a whole batch at once.
+    whose review a member is waiting for (URGENT) is handed out on its own, since a worker reports a whole batch at once,
+    and never to a worker in ANALYSIS_SLOW_WORKERS: it waits for a faster one.
 
     With `rerun_below` (the current method version), once nothing else is waiting the games already analysed by an
     older method version are handed out too, newest first, to be analysed again; their old figures stay in place
@@ -112,9 +113,11 @@ def claim(worker, limit, now, rerun_below=None):
             "WHERE status = ? AND claimed_at <= ? AND attempts >= ?", (FAILED, CLAIMED, expired, settings.ANALYSIS_MAX_ATTEMPTS))
         conn.execute("UPDATE game_analysis SET status = ?, claimed_by = NULL, claimed_at = NULL WHERE status = ? AND claimed_at <= ?",
                      (PENDING, CLAIMED, expired))
+        lowest = NORMAL if worker in settings.ANALYSIS_SLOW_WORKERS else URGENT
         rows = conn.execute(
             "SELECT site, game_id, month, ended_at, white_username, black_username, attempts, priority FROM game_analysis "
-            "WHERE status = ? ORDER BY priority, ended_at DESC, game_id LIMIT ?", (PENDING, max(0, limit))).fetchall()
+            "WHERE status = ? AND priority >= ? ORDER BY priority, ended_at DESC, game_id LIMIT ?",
+            (PENDING, lowest, max(0, limit))).fetchall()
         if rows and rows[0]["priority"] == URGENT:  # a member is waiting for this one: it goes alone, so it comes back in seconds
             rows = rows[:1]
         elif rerun_below is not None and len(rows) < limit:
