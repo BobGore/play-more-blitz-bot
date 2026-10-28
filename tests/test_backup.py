@@ -141,3 +141,64 @@ def test_running_it_as_a_program_uses_the_settings_and_reports(live, folder, tmp
     bad = subprocess.run([sys.executable, "backup.py"], capture_output=True, text=True, cwd=Path(backup.__file__).parent,
                          env={**env, "BACKUP_DIR": str(tmp_path / "nowhere")})
     assert bad.returncode != 0 and "does not exist" in bad.stderr and not (tmp_path / "nowhere").exists()
+
+
+def make_db(path, rows=("alice_example",)):
+    conn = sqlite3.connect(path)
+    conn.execute("create table counts (name text)")
+    conn.executemany("insert into counts values (?)", [(r,) for r in rows])
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_another_database_gets_its_own_name_and_its_own_window(live, folder):
+    counts = make_db(live.with_name("blundermap.db"))
+    make_old(folder, 100, 1)  # the bot's own old copies
+    (folder / f"blundermap-{(TODAY - timedelta(days=100)).isoformat()}.db").write_bytes(b"old")
+    final, removed = backup.run(counts, folder, 100, today=TODAY, name="blundermap")
+    assert final == folder / "blundermap-2026-09-21.db"
+    assert [p.name for p in removed] == [f"blundermap-{(TODAY - timedelta(days=100)).isoformat()}.db"]
+    # the bot's own copies are not counted or pruned as blundermap ones, and the queue's name doesn't match either
+    assert (folder / f"playmoreblitz-{(TODAY - timedelta(days=100)).isoformat()}.db").exists()
+    (folder / "blundermap-queue-2026-01-01.db").write_bytes(b"old")
+    assert [d for d, _ in backup.dated(folder, "blundermap")] == [TODAY]
+
+
+def program_env(live, folder):
+    return {**{k: v for k, v in os.environ.items() if k not in settings.NAMES}, "PLAYMOREBLITZ_DB": str(live),
+            "BACKUP_DIR": str(folder), "BACKUP_KEEP_DAYS": "100"}
+
+
+def run_program(env):
+    return subprocess.run([sys.executable, "backup.py"], capture_output=True, text=True, cwd=Path(backup.__file__).parent, env=env)
+
+
+def test_the_program_backs_up_the_blunder_map_counts_and_queue_when_set(live, folder):
+    counts = make_db(live.with_name("blundermap.db"))
+    make_db(live.with_name("blundermap-queue.db"))
+    done = run_program({**program_env(live, folder), "BLUNDERMAP_DB": str(counts)})
+    assert done.returncode == 0, done.stderr
+    today = date.today().isoformat()
+    assert names(folder) == [f"blundermap-{today}.db", f"blundermap-queue-{today}.db", f"playmoreblitz-{today}.db"]
+    assert done.stdout.count("backed up to") == 3
+
+
+def test_without_a_queue_file_only_the_counts_are_added(live, folder):
+    counts = make_db(live.with_name("blundermap.db"))
+    done = run_program({**program_env(live, folder), "BLUNDERMAP_DB": str(counts)})
+    assert done.returncode == 0, done.stderr
+    assert len(names(folder)) == 2
+
+
+def test_a_missing_blunder_map_file_fails_after_the_bots_own_backup_is_made(live, folder):
+    done = run_program({**program_env(live, folder), "BLUNDERMAP_DB": str(live.with_name("gone.db"))})
+    assert done.returncode != 0 and "no database" in done.stderr
+    assert names(folder) == [f"playmoreblitz-{date.today().isoformat()}.db"]
+
+
+def test_without_the_setting_only_the_bots_own_database_is_backed_up(live, folder):
+    make_db(live.with_name("blundermap.db"))
+    done = run_program(program_env(live, folder))
+    assert done.returncode == 0, done.stderr
+    assert names(folder) == [f"playmoreblitz-{date.today().isoformat()}.db"]

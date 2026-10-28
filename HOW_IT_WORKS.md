@@ -150,7 +150,8 @@ sqlite3 "$DB" "select game_id, status, skip_reason, attempts, last_error from ga
 
 **Backups.** `backup.py` (systemd timer `playmoreblitz-backup.timer`, nightly) makes a consistent copy with SQLite's own
 backup, checks it, and only then puts it in place as `playmoreblitz-YYYY-MM-DD.db` in `BACKUP_DIR`, then removes copies
-older than `BACKUP_KEEP_DAYS`. It refuses to run if `BACKUP_DIR` is missing (an unmounted disk) rather than fill the wrong
+older than `BACKUP_KEEP_DAYS`. When `BLUNDERMAP_DB` is set it does the same for the good-move counts and their counting
+queue (`blundermap-YYYY-MM-DD.db`, `blundermap-queue-YYYY-MM-DD.db`). It refuses to run if `BACKUP_DIR` is missing (an unmounted disk) rather than fill the wrong
 disk. To restore: stop the bot, copy a backup over the live file, start the bot. Check with
 `systemctl list-timers playmoreblitz-backup.timer` and `ls` of the folder.
 

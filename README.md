@@ -185,7 +185,8 @@ created on first use and upgraded in place when a new version adds to it.
 
 `backup.py` makes a dated copy, `playmoreblitz-YYYY-MM-DD.db`, in `BACKUP_DIR` using SQLite's own backup, so it is safe
 while the bot runs. Copies older than `BACKUP_KEEP_DAYS` (100) days are then removed, but only after a good new copy
-exists. The folder must already exist and should be on a different disk from the database; if it is missing (the disk
+exists. When `BLUNDERMAP_DB` is set, the good-move counts and the counting queue beside them are
+backed up the same way, as `blundermap-YYYY-MM-DD.db` and `blundermap-queue-YYYY-MM-DD.db`. The folder must already exist and should be on a different disk from the database; if it is missing (the disk
 isn't mounted) the backup refuses to run rather than fill the wrong disk. To run it every night at 03:30 on a systemd
 machine, edit the paths and user in `playmoreblitz-backup.service`, copy it and `playmoreblitz-backup.timer` to
 `/etc/systemd/system/`, then:
