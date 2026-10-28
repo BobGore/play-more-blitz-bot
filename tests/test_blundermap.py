@@ -361,3 +361,13 @@ def test_analysisq_adds_the_counting_queue_when_the_map_is_on(isolated, monkeypa
     ctx = make_ctx(ADMIN)
     asyncio.run(botmod.analysisq.callback(ctx))
     assert "Blunder map counting" not in said(ctx)[0]
+
+
+def test_the_help_lists_blundermap_only_once_it_is_open_to_everyone(monkeypatch):
+    assert "!blundermap" not in "".join(botmod.help_messages())  # testers only: the others would be refused
+    monkeypatch.setattr(settings, "BLUNDERMAP_EVERYONE", True)
+    channel, private = botmod.help_messages()
+    assert "`!blundermap [month] [site]`" in private and "!blundermap" not in channel
+    assert all(len(m) < 2000 for m in (channel, private))
+    monkeypatch.setattr(settings, "BLUNDERMAP_DB", "")
+    assert "!blundermap" not in "".join(botmod.help_messages())  # switched off altogether

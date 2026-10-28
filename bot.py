@@ -458,7 +458,12 @@ async def _reject(ctx, reason, *, refund_cooldown=False):
 
 def help_messages():
     """The help, as two messages (each must stay under Discord's 2,000 characters): the commands for the channel, then
-    the private ones, which work in a direct message to the bot."""
+    the private ones, which work in a direct message to the bot. !blundermap is listed once it is open to everyone."""
+    blundermap = (
+        "`!blundermap [month] [site]` - your blunder map for a month (this month if none): a page to open in a browser "
+        "showing where your blunders happen, with a flashcard for each. One file per account, or give a site for one. "
+        "Your flashcard progress is kept in that browser. Direct message only\n"
+        if settings.BLUNDERMAP_DB and settings.BLUNDERMAP_EVERYONE else "")
     return [
         "**PlayMoreBlitz bot** - counts each member's rated blitz games this month.\n"
         f"`{USAGE['add']}` - register your own account, one per site. "
@@ -475,6 +480,7 @@ def help_messages():
         "`!myhistory [site]` - your own months from what's been analysed - can include a month `!backfill` added that "
         "`!history` can't see. Direct message only\n"
         "`!lastgame [username]` - a player's latest analysed game: both sides, with a link. Direct message only\n"
+        f"{blundermap}"
         "`/obit [game link or id]` - a private review of one of your own games (Openings, Blunders, Interesting, Takeaway), "
         "sent by DM; no link means your latest game, and if it isn't analysed yet it jumps the queue. Or `!obit` by DM. "
         "Registered members on the server only\n"
