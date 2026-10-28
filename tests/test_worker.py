@@ -888,8 +888,32 @@ def test_a_name_that_chesscom_could_not_have_is_never_requested():
     http = FakeHttp()
     http.archives = {("carol_example", MONTH): {"games": []}}
     w.run_once(Direct(), http, FakeEngine(), CONFIG)
-    assert [c[1] for c in http.calls if c[0] == "chess.com"] == ["carol_example"]
+    assert {c[1] for c in http.calls if c[0] == "chess.com"} == {"carol_example"}
     assert row("live/8")["skip_reason"] == "unavailable"
+
+
+def test_a_chesscom_game_filed_under_the_month_before_is_still_found():
+    # A game that ends just after midnight UTC on the 1st is in the previous month's archive on Chess.com.
+    setup_queue(record("chess.com", "live/9", "carol_example", "rival_example", 1))
+    http = FakeHttp()
+    http.archives = {("carol_example", MONTH): {"games": []}, ("rival_example", MONTH): {"games": []},
+                     ("carol_example", "2026-08"): {"games": [cc("live/9", RUY)]}}
+    w.run_once(Direct(), http, FakeEngine(), CONFIG)
+    assert row("live/9")["status"] == "done"
+    assert [c[1:] for c in http.calls if c[0] == "chess.com"] == [
+        ("carol_example", MONTH), ("rival_example", MONTH), ("carol_example", "2026-08")]
+
+
+def test_a_chesscom_game_found_in_its_own_month_never_fetches_the_month_before():
+    setup_queue(record("chess.com", "live/10", "carol_example", "rival_example", 1))
+    http = FakeHttp()
+    http.archives = {("carol_example", MONTH): {"games": [cc("live/10", RUY)]}}
+    w.run_once(Direct(), http, FakeEngine(), CONFIG)
+    assert [c[2] for c in http.calls if c[0] == "chess.com"] == [MONTH]
+
+
+def test_the_month_before_january_is_december_of_the_year_before():
+    assert (w._previous_month("2026-01"), w._previous_month("2026-10")) == ("2025-12", "2026-09")
 
 
 def test_the_same_archive_asked_for_in_different_capitals_is_fetched_once():

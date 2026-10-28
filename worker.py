@@ -434,19 +434,29 @@ def fetch_games(jobs, http, min_plies):
     archives = {}
     for j in (j for j in jobs if j["site"] == "chess.com"):
         game = None
-        for username in (j["white_username"], j["black_username"]):
-            if not _USERNAME.match(username):
-                continue  # not a name Chess.com can have (such as "anonymous" placeholders); the other player's archive will do
-            key = (username.lower(), j["month"])
-            if key not in archives:
-                archives[key] = http.chesscom_archive(username, j["month"])
-            game = game_data.find_chesscom_game(archives[key] or {}, j["game_id"])
+        # Chess.com files a game that ends in the first hours of a month (UTC) under the month before, so look there too.
+        for month in (j["month"], _previous_month(j["month"])):
+            for username in (j["white_username"], j["black_username"]):
+                if not _USERNAME.match(username):
+                    continue  # not a name Chess.com can have (such as "anonymous" placeholders); the other player's archive will do
+                key = (username.lower(), month)
+                if key not in archives:
+                    archives[key] = http.chesscom_archive(username, month)
+                game = game_data.find_chesscom_game(archives[key] or {}, j["game_id"])
+                if game is not None:
+                    break
             if game is not None:
                 break
         found[("chess.com", j["game_id"])] = (
             game_data.NotAnalysable(game_data.UNAVAILABLE, "the game is not in either player's Chess.com archive") if game is None
             else _read(game_data.from_chesscom, game, min_plies))
     return found
+
+
+def _previous_month(month):
+    """The "YYYY-MM" month before `month`."""
+    year, mon = (int(part) for part in month.split("-"))
+    return f"{year - 1:04d}-12" if mon == 1 else f"{year:04d}-{mon - 1:02d}"
 
 
 def _read(parse, raw, min_plies):
