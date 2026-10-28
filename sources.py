@@ -61,6 +61,9 @@ class UnknownResult(SourceError):
     """A game ended in a way this code doesn't know how to count."""
 
 
+CHESSCOM_MONTH_FAULT = "chess.com couldn't send this month's games just now (a fault on their side)"
+
+
 @dataclass(frozen=True)
 class Game:
     ended_at: datetime  # aware, UTC
@@ -382,7 +385,15 @@ async def month_games(session, site, username, month, *, after=None, limit=None)
     if site == "chess.com":
         url = f"https://api.chess.com/pub/player/{username.lower()}/games/{start.year}/{start.month:02d}"
         async with _chesscom_lock:
-            text = await _get(session, site, url, username, timeout=MONTH_TIMEOUT)
+            try:
+                text = await _get(session, site, url, username, timeout=MONTH_TIMEOUT)
+            except NoSuchUser:
+                text = None
+        if text is None:
+            # Chess.com sometimes fails one month's archive with a 404 ("an internal error") for an account that exists:
+            # say so, and keep "no account" for one that really is gone (the profile raises NoSuchUser).
+            await account_name(session, site, username)
+            raise SourceError(CHESSCOM_MONTH_FAULT)
         games = only_after(parse_chesscom_month(_json(site, text), username), after)
         return games[:limit] if limit is not None else games
 

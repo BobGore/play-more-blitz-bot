@@ -77,3 +77,38 @@ def test_a_bad_username_is_refused_before_any_request(site_says):
 def test_an_unknown_site_is_a_programming_error(site_says):
     with pytest.raises(ValueError):
         name_of("example.org", "alice")
+
+
+def months_games_with(monkeypatch, archive_404, profile_404):
+    """month_games on Chess.com where the month's archive and/or the profile answer 404."""
+    urls = []
+
+    async def fake_get(session, site, url, username, *, timeout, params=None, ndjson=False):
+        urls.append(url)
+        if ("/games/" in url and archive_404) or ("/games/" not in url and profile_404):
+            raise sources.NoSuchUser(f"no {site} account '{username}'")
+        return json.dumps({"games": []} if "/games/" in url else {"url": "https://www.chess.com/member/Alice"})
+
+    monkeypatch.setattr(sources, "_get", fake_get)
+    return urls, lambda: asyncio.run(sources.month_games(None, "chess.com", "alice", "2026-10"))
+
+
+def test_a_failing_chesscom_month_for_an_account_that_exists_says_it_is_chesscoms_fault(monkeypatch):
+    urls, fetch = months_games_with(monkeypatch, archive_404=True, profile_404=False)
+    with pytest.raises(sources.SourceError) as failed:
+        fetch()
+    assert not isinstance(failed.value, sources.NoSuchUser) and "fault on their side" in str(failed.value)
+    assert len(str(failed.value)) <= 80  # !results shows the first 80 characters
+    assert urls == ["https://api.chess.com/pub/player/alice/games/2026/10", "https://api.chess.com/pub/player/alice"]
+
+
+def test_a_chesscom_account_that_is_really_gone_still_says_no_account(monkeypatch):
+    _, fetch = months_games_with(monkeypatch, archive_404=True, profile_404=True)
+    with pytest.raises(sources.NoSuchUser, match="no chess.com account 'alice'"):
+        fetch()
+
+
+def test_a_working_chesscom_month_never_asks_for_the_profile(monkeypatch):
+    urls, fetch = months_games_with(monkeypatch, archive_404=False, profile_404=False)
+    assert fetch() == []
+    assert urls == ["https://api.chess.com/pub/player/alice/games/2026/10"]
