@@ -102,11 +102,14 @@ You need Python 3.13 or newer.
 
 ### 2. Configure
 
-Copy `.env.example` to `.env` and fill it in. It is ignored by git and must stay private. The two private values:
+Copy `.env.example` to `.env` and fill it in. It is ignored by git and must stay private. The private values:
 
 - `DISCORD_TOKEN`: the bot's token.
 - `CONTACT`: an address or URL that Chess.com and Lichess can use to reach you if the bot misbehaves. It is sent
   in the User-Agent of site requests. Without it the bot still works but the sites can't contact you.
+- `LICHESS_TOKEN`: a Lichess API token with no scopes ticked (create one at lichess.org/account/oauth/token). Lichess
+  refuses the games export to an app without one, with a 404 that looks like a missing account; the bot then says
+  Lichess refused rather than "no account". It is sent to Lichess only and never logged.
 - `PLAYMOREBLITZ_DB` (optional): where the database file lives, if not beside the code. Use it to keep the data on a
   larger disk, in a folder of its own that already exists there. If that folder is missing (say the disk hasn't
   mounted yet) the bot refuses to start, and a service manager will keep retrying, so it can never quietly begin a

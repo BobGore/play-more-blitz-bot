@@ -31,6 +31,11 @@ SITES = ("chess.com", "lichess")
 CONTACT = os.environ.get("CONTACT", "").strip()
 USER_AGENT = "PlayMoreBlitz-Bot/1.0" + (f" (contact: {CONTACT})" if CONTACT else "")
 
+# A Lichess API token (no scopes needed). Since 10 Nov 2026 Lichess refuses the
+# games export to an unauthenticated app with a bare 404; a token gets it back.
+# Sent to Lichess only, never logged. From the environment, like CONTACT.
+LICHESS_TOKEN = os.environ.get("LICHESS_TOKEN", "").strip()
+
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT_SECONDS)
 # Lichess streams a game export at about 11-12 games a second, so a busy month
 # (375 games took 33s) can't have a short flat limit. A generous overall cap
@@ -62,6 +67,8 @@ class UnknownResult(SourceError):
 
 
 CHESSCOM_MONTH_FAULT = "chess.com couldn't send this month's games just now (a fault on their side)"
+LICHESS_EXPORT_REFUSED = "lichess refused to send this month's games just now (the account exists)"
+LICHESS_TOKEN_REFUSED = "lichess refused the bot's API token (HTTP 401): check LICHESS_TOKEN"
 
 
 @dataclass(frozen=True)
@@ -317,10 +324,15 @@ async def _get(session, site, url, username, *, timeout, params=None, ndjson=Fal
     headers = {"User-Agent": USER_AGENT}
     if ndjson:
         headers["Accept"] = "application/x-ndjson"
+    token = site == "lichess" and LICHESS_TOKEN and url.startswith("https://lichess.org/")
+    if token:
+        headers["Authorization"] = f"Bearer {LICHESS_TOKEN}"
     try:
-        async with session.get(url, params=params, headers=headers, timeout=timeout) as resp:
+        async with session.get(url, params=params, headers=headers, timeout=timeout, allow_redirects=not token) as resp:
             if resp.status == 404:
                 raise NoSuchUser(f"no {site} account '{username}'")
+            if resp.status == 401 and token:
+                raise SourceError(LICHESS_TOKEN_REFUSED)
             if resp.status == 429:
                 raise SourceError(f"{site} is rate limiting me (HTTP 429), try again in a few minutes")
             if resp.status != 200:
@@ -407,8 +419,16 @@ async def month_games(session, site, username, month, *, after=None, limit=None)
                 await asyncio.sleep(wait)
             try:
                 text = await _get(session, site, url, username, timeout=MONTH_TIMEOUT, params=params, ndjson=True)
+            except NoSuchUser:
+                text = None
             finally:
                 _lichess_last_export = time.monotonic()
+        if text is None:
+            # Lichess answers the games export with a bare 404 for an account that exists when it won't serve
+            # the request (from 10 Nov 2026, any app without a token): say so, and keep "no account" for one
+            # that really is gone (the profile raises NoSuchUser).
+            await account_name(session, site, username)
+            raise SourceError(LICHESS_EXPORT_REFUSED)
         return only_after(parse_lichess_month(text, username), after)
 
     raise ValueError(f"unknown site {site!r}")

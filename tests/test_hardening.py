@@ -299,9 +299,9 @@ def test_the_readme_names_no_real_accounts_or_ids_or_secrets():
     assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", README)  # no email addresses (a bare @member placeholder is fine)
 
 
-def test_the_env_example_names_both_settings_and_holds_no_values():
+def test_the_env_example_names_the_private_settings_and_holds_no_values():
     lines = [ln for ln in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines() if ln and not ln.startswith("#")]
-    assert lines == ["DISCORD_TOKEN=", "CONTACT="]
+    assert lines == ["DISCORD_TOKEN=", "CONTACT=", "LICHESS_TOKEN="]
 
 
 def test_the_service_file_is_a_template_with_placeholders_not_a_real_install():

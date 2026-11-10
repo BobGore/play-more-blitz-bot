@@ -5,7 +5,7 @@ same name in `.env` (for instance `COOLDOWN_SECONDS=300`, or `ALLOWED_CHANNEL_ID
 restart the bot. A setting that is present but not valid stops the bot at startup with a message
 saying which one, rather than being guessed at. The README has a table of them all.
 
-Not here on purpose: the Discord token and CONTACT address (private, `.env` only, read where they
+Not here on purpose: the Discord token, CONTACT address and Lichess token (private, `.env` only, read where they
 are used), and constants that are facts about Discord, the two sites or the code rather than choices.
 """
 

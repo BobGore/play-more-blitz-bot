@@ -175,6 +175,11 @@ disk. To restore: stop the bot, copy a backup over the live file, start the bot.
 Only **rated standard blitz** games count. Anything unexpected from a site (an unknown result code, a missing rating
 change) raises instead of being guessed at.
 
+Lichess requests carry the `LICHESS_TOKEN` from `.env` (Lichess only, redirects not followed, never logged). Without it
+Lichess refuses the games export with a bare 404. Both sites sometimes answer a month's games with a 404 for an account
+that exists, so before saying "no account" the bot checks the profile: if it exists, the error says the site refused or
+failed instead.
+
 ## 6. The analysis flow
 
 The path of one game, and every place it can stop:

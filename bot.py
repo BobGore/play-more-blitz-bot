@@ -361,6 +361,8 @@ def configuration_warnings():
     problems = []
     if not sources.CONTACT:
         problems.append("CONTACT is not set: site requests carry no contact address (see .env.example)")
+    if not sources.LICHESS_TOKEN:
+        problems.append("LICHESS_TOKEN is not set: Lichess refuses the games export without one (see .env.example)")
     if POST_CHANNEL_ID not in ALLOWED_CHANNEL_IDS:
         problems.append(f"POST_CHANNEL_ID {POST_CHANNEL_ID} is not in ALLOWED_CHANNEL_IDS, so nobody can run commands where the bot posts")
     if bot.get_channel(POST_CHANNEL_ID) is None:
