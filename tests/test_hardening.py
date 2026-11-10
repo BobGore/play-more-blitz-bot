@@ -25,6 +25,8 @@ ALICE, ADMIN = 1001, min(botmod.ADMIN_USER_IDS)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(botmod, "_start_refresh", lambda *a: None)
+    # The machine's own environment must not decide the warnings (a developer PC may have a token set).
+    monkeypatch.setattr(sources, "LICHESS_TOKEN", "x")
 
 
 def forbidden():
@@ -164,6 +166,13 @@ def test_a_missing_contact_is_warned_about(monkeypatch, channel_visible):
     assert "CONTACT is not set" in warning
 
 
+def test_a_missing_lichess_token_is_warned_about(monkeypatch, channel_visible):
+    monkeypatch.setattr(sources, "CONTACT", "x")
+    monkeypatch.setattr(sources, "LICHESS_TOKEN", "")
+    (warning,) = botmod.configuration_warnings()
+    assert "LICHESS_TOKEN is not set" in warning
+
+
 def test_a_post_channel_that_is_not_an_allowed_channel_is_warned_about(monkeypatch, channel_visible):
     monkeypatch.setattr(sources, "CONTACT", "x")
     monkeypatch.setattr(botmod, "POST_CHANNEL_ID", 42)
@@ -180,9 +189,10 @@ def test_a_post_channel_the_bot_cannot_see_is_warned_about(monkeypatch):
 
 def test_every_problem_is_reported_not_just_the_first(monkeypatch):
     monkeypatch.setattr(sources, "CONTACT", "")
+    monkeypatch.setattr(sources, "LICHESS_TOKEN", "")
     monkeypatch.setattr(botmod, "POST_CHANNEL_ID", 42)
     monkeypatch.setattr(botmod.bot, "get_channel", lambda channel_id: None)
-    assert len(botmod.configuration_warnings()) == 3
+    assert len(botmod.configuration_warnings()) == 4
 
 
 # --- only one copy at a time ----------------------------------------------------
